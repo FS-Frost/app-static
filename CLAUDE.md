@@ -1,0 +1,70 @@
+# CLAUDE.md
+
+Guía para Claude Code (claude.ai/code) al trabajar en este repositorio.
+
+## Qué es
+
+App estática (SvelteKit 2 + Svelte 5 runes + TypeScript, `adapter-static`) que lee
+hojas de respuestas de 45 u 80 preguntas con la cámara. **Sin backend**: cámara,
+OpenCV y clasificación corren en el navegador. El detalle de arquitectura y las
+decisiones de diseño están en [README.md](README.md); acá va lo que conviene tener
+presente antes de tocar código.
+
+## Comandos
+
+```shell
+bun install
+bun run dev
+bun run lint         # svelte-check + eslint. Debe pasar antes de commitear.
+bun run test         # vitest
+bun run test:e2e     # playwright (necesita chromium; CHROMIUM_PATH sirve)
+bun run build
+```
+
+## Reglas de este repo
+
+- **Nada de PII en el repositorio.** `examples/` son escaneos reales con nombre,
+  colegio y RUT: está en `.gitignore`. Las fixtures de `tests/fixtures` van con la
+  cabecera censurada. Si generas una fixture nueva, censura antes de copiarla.
+- **El build de OpenCV es recortado y parcheado.** Antes de usar una función de
+  OpenCV, revisa `src/lib/scan/opencv.ts`: si no está declarada ahí, probablemente
+  no exista en el build (`contourArea`, `minAreaRect`, `moments`, `morphologyEx` no
+  existen) y el error aparece en runtime, no al compilar.
+- **No asumas la semántica del build: mídela.** Ya hay tres sorpresas documentadas
+  (bounding rect antepuesto en `findContours`, `getPerspectiveTransform` inexacto,
+  convención de `warpPerspective` calibrada en `warpConvention.ts`). Si algo sale
+  torcido, sospecha del build antes que del álgebra.
+- **La geometría de la hoja no se hardcodea.** Filas, bloques y alternativas se
+  reconstruyen de la hoja detectada. Si te tienta agregar un factor fijo
+  (`0.445 * pageHeight` y compañía), es la trampa en la que cayó el escáner
+  anterior: revisa `grid.ts` primero.
+- **Los umbrales de clasificación se validan contra hojas reales**, no a ojo. Un
+  cambio en `classify.ts` o en la medición de relleno se comprueba con
+  `bun run test:e2e` (45 respuestas conocidas, hoja fotografiada con sombra, hoja
+  sin marcar).
+- **Peor error posible: una pregunta marcada que se reporta en blanco.** Antes que
+  adivinar, se reporta doble marca (`BD`) o se descarta el frame con un motivo en
+  español que el usuario pueda accionar ("mira la hoja de frente").
+
+## Dónde tocar qué
+
+| Necesidad | Archivo |
+| --- | --- |
+| Nuevo formato de hoja | `src/lib/scan/format.ts` |
+| Ubicación de la hoja / validación del encuadre | `src/lib/scan/geometry.ts` |
+| Reconstrucción de la grilla | `src/lib/scan/grid.ts` |
+| Umbrales de marcado y consenso entre frames | `src/lib/scan/classify.ts` |
+| Pipeline OpenCV | `src/lib/scan/worker.ts` |
+| Cámara, estado, flash | `src/lib/scan/scanner.svelte.ts` |
+| Caché offline | `static/worker.js` |
+
+## Depurar una hoja que no se lee
+
+1. Activar **Depurar** en la pantalla de formato y volver a escanear con
+   **Usar una imagen**.
+2. Mirar la hoja rectificada: si la grilla no cae sobre las burbujas, el problema
+   es la ubicación (marcas/homografía), no la clasificación.
+3. Si el frame se descarta, el panel muestra el motivo con los contornos, marcas y
+   filas detectadas.
+4. `Relleno por burbuja` en el mismo panel da los valores con los que decidió
+   `classify.ts`.

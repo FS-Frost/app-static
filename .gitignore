@@ -1,0 +1,14 @@
+node_modules
+/build
+/.svelte-kit
+/package
+.env
+.env.*
+!.env.example
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+test-results
+
+# Hojas de ejemplo: son escaneos reales con nombre, colegio y RUT de alumnos.
+# Sirven para validar en local; no van al repositorio.
+/examples

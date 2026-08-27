@@ -1,0 +1,61 @@
+name: Deploy to GitHub Pages
+
+on:
+    push:
+        branches:
+            - main
+            - master
+
+# El deploy publica en la rama gh-pages con el GITHUB_TOKEN, que en repos nuevos
+# viene de sólo lectura: sin este permiso el push falla al final del pipeline.
+permissions:
+    contents: write
+
+jobs:
+    test-build-deploy:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout 🛎️
+              uses: actions/checkout@v4
+
+            - uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: latest
+
+            - name: Install
+              run: bun install --frozen-lockfile
+
+            - name: Lint (tipos, plantillas y eslint)
+              run: bun run lint
+
+            - name: Unit tests
+              run: bun run test
+
+            # Los e2e son los únicos que ejercitan el pipeline completo con OpenCV
+            # dentro del worker, contra hojas reales.
+            # El test de cámara arma el video de la cámara falsa con ffmpeg. Si no
+            # está, ese test se salta solo y el resto del pipeline sigue.
+            - name: Install ffmpeg
+              run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+            - name: Install browser
+              run: bunx playwright install --with-deps chromium
+
+            - name: End-to-end tests
+              run: bun run test:e2e
+
+            - name: Build 🔧
+              run: bun run build
+
+            - name: Generate build info
+              run: |
+                  echo "{\"sha\": \"${{ github.sha }}\", \"ref\": \"${{ github.ref_name }}\", \"actor\": \"${{ github.actor }}\"}" > build/build-info.json
+
+            - name: Generate .nojekyll
+              run: echo "" > build/.nojekyll
+
+            - name: Deploy 🚀
+              uses: JamesIves/github-pages-deploy-action@v4
+              with:
+                  branch: gh-pages
+                  folder: build
