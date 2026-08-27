@@ -57,6 +57,15 @@ export type FrameResult = {
 	motion: number;
 	/** Zona analizada, para saber si el seguimiento está activo. */
 	searchRect: Rect | null;
+	/**
+	 * Zona donde conviene buscar en el frame siguiente cuando este falló: sale del QR,
+	 * que se ve de más lejos que las marcas.
+	 */
+	hintRoi: Rect | null;
+	/** Vía que ubicó la hoja ("marcas", "qr", "marcas C12"...). */
+	source: string;
+	/** Cuántas vías se pudieron intentar en este frame. */
+	attempts: number;
 	timing: FrameTiming;
 };
 

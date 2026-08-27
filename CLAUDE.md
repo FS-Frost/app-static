@@ -57,6 +57,13 @@ bun run build
   origen). Dos bugs ya salieron de mezclarlos: la estimación del QR sin restar el
   desplazamiento de la zona, y la zona del video aplicada a una foto de otra
   resolución.
+- **Antes de optimizar, medir.** El panel de depuración trae los tiempos por etapa
+  (gris, máscaras, QR, movimiento, lectura), frames procesados y milisegundos hasta
+  la primera lectura. Dos veces en este proyecto la intuición apuntó al lugar
+  equivocado: recorrer contornos no era el cuello, y una corrida "lenta" era la
+  máquina cargada, no el código.
+- **El tiempo hasta la primera lectura es la métrica que importa**, no los fps. Está
+  en `data-primera` de la barra de estado y en el panel de depuración.
 - **La plantilla del QR se mide, no se estima.** El modo depuración imprime las
   esquinas del bloque en el marco del símbolo; esos son los números de `qrTemplates`.
   El contenido del QR nunca se escribe en una salida.
@@ -68,6 +75,7 @@ bun run build
 | Nuevo formato de hoja | `src/lib/scan/format.ts` |
 | Anclas, tolerancias y modos de captura | `src/lib/scan/strategy.ts` |
 | Guía de encuadre, zoom, seguimiento, autodisparo | `src/lib/scan/assist.ts` |
+| Cascada de vías de detección y caché de grilla | `src/lib/scan/worker.ts` |
 | Plantilla del QR y afinado con marcas | `src/lib/scan/qr.ts` |
 | Ubicación de la hoja / validación del encuadre | `src/lib/scan/geometry.ts` |
 | Reconstrucción de la grilla | `src/lib/scan/grid.ts` |

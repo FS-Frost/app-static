@@ -51,6 +51,13 @@
 		localStorage.setItem("asistencia", scanner.assist ? "1" : "0");
 	});
 
+	// El detector se empieza a cargar en cuanto se abre la app: son 2,5 MB de wasm y
+	// si se espera al "Abrir cámara", ese segundo lo paga el usuario mirando la
+	// pantalla.
+	$effect(() => {
+		scanner.preload();
+	});
+
 	$effect(() => {
 		if (iniciado) {
 			return;

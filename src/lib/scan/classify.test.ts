@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { answersToCsv, answersToText, classifyQuestion, voteAnswers, type CellFill } from "./classify";
+import { answersToCsv, answersToText, classifyQuestion, lastTwoAgree, voteAnswers, type CellFill } from "./classify";
 
 function fills(values: number[]): CellFill[] {
 	const letters = ["A", "B", "C", "D", "E"];
@@ -70,6 +70,20 @@ describe("voteAnswers", () => {
 	it("trata como blanco las preguntas que un frame no trajo", () => {
 		const vote = voteAnswers([["A"]], 2, 1);
 		expect(vote.answers).toEqual(["A", ""]);
+	});
+});
+
+describe("lastTwoAgree", () => {
+	it("reconoce dos lecturas idénticas seguidas", () => {
+		expect(lastTwoAgree([["A", ""], ["A", "B"], ["A", "B"]])).toBe(true);
+	});
+
+	it("no se conforma con una sola lectura", () => {
+		expect(lastTwoAgree([["A", "B"]])).toBe(false);
+	});
+
+	it("distingue una diferencia en una sola pregunta", () => {
+		expect(lastTwoAgree([["A", "B"], ["A", "C"]])).toBe(false);
 	});
 });
 

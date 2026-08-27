@@ -41,28 +41,6 @@
 		context.closePath();
 	}
 
-	function trazarFlecha(context: CanvasRenderingContext2D, desde: { x: number; y: number }, nudge: { x: number; y: number }, largo: number): void {
-		const norma = Math.hypot(nudge.x, nudge.y);
-		if (norma === 0) {
-			return;
-		}
-
-		const dx = (nudge.x / norma) * largo;
-		const dy = (nudge.y / norma) * largo;
-		const hasta = { x: desde.x + dx, y: desde.y + dy };
-		const angulo = Math.atan2(dy, dx);
-		const ala = largo * 0.25;
-
-		context.beginPath();
-		context.moveTo(desde.x, desde.y);
-		context.lineTo(hasta.x, hasta.y);
-		context.moveTo(hasta.x, hasta.y);
-		context.lineTo(hasta.x - ala * Math.cos(angulo - 0.5), hasta.y - ala * Math.sin(angulo - 0.5));
-		context.moveTo(hasta.x, hasta.y);
-		context.lineTo(hasta.x - ala * Math.cos(angulo + 0.5), hasta.y - ala * Math.sin(angulo + 0.5));
-		context.stroke();
-	}
-
 	// El overlay se redibuja cuando llega un resultado nuevo, no en cada frame de
 	// video: dibujar más seguido que el detector sólo gasta batería.
 	$effect(() => {
@@ -71,7 +49,6 @@
 		const qrQuad = scanner.qrQuad;
 		const target = scanner.target;
 		const searchRect = scanner.searchRect;
-		const nudge = scanner.guidance.nudge;
 		const size = scanner.frameSize;
 		if (overlay == null || size.width === 0) {
 			return;
@@ -133,18 +110,6 @@
 			context.fill();
 		}
 
-		// Flecha: hacia dónde mover el teléfono. Sale del centro porque es donde está
-		// mirando quien encuadra.
-		if (nudge != null && scanner.assist) {
-			context.strokeStyle = "rgba(56, 189, 248, 0.95)";
-			context.lineWidth = trazo * 1.5;
-			trazarFlecha(
-				context,
-				{ x: overlay.width / 2, y: overlay.height / 2 },
-				nudge,
-				Math.min(overlay.width, overlay.height) * 0.18
-			);
-		}
 	});
 </script>
 
@@ -159,7 +124,9 @@
 	></video>
 	<canvas bind:this={overlay}></canvas>
 
-	<div class="estado" class:listo={scanner.status === "listo"}>
+	<!-- `data-primera` deja a la vista el tiempo hasta la primera lectura sin tener que
+	     abrir el panel de depuración: es la métrica que importa al encuadrar. -->
+	<div class="estado" class:listo={scanner.status === "listo"} data-primera={scanner.msToFirstRead}>
 		<span class="punto"></span>
 		<!-- La guía sólo mientras se encuadra: una vez leída la hoja, lo que importa es
 		     el estado ("lectura estable"). -->

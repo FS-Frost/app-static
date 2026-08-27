@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { looseTolerance } from "./strategy";
 import {
 	checkQuad,
 	cluster1d,
@@ -183,7 +184,7 @@ describe("findAnswersQuad", () => {
 	}
 
 	it("usa las filas de marcas que encierran el bloque, no las de la cabecera", () => {
-		const quad = findAnswersQuad(
+		const encontrado = findAnswersQuad(
 			[
 				// Marcas de la cabecera: dos, más arriba, y más separadas que las del
 				// bloque, para que no gane la fila más ancha.
@@ -203,6 +204,7 @@ describe("findAnswersQuad", () => {
 			opciones
 		);
 
+		const quad = encontrado?.quad;
 		expect(quad?.topLeft).toEqual({ x: 75, y: 550 });
 		expect(quad?.topRight).toEqual({ x: 855, y: 550 });
 		expect(quad?.bottomRight).toEqual({ x: 855, y: 1100 });
@@ -210,8 +212,7 @@ describe("findAnswersQuad", () => {
 	});
 
 	it("descarta el frame si a una fila le falta la marca de una esquina", () => {
-		const quad = findAnswersQuad([mark(75, 550), mark(855, 550), mark(75, 1100), mark(500, 1100)], opciones);
-		expect(quad).toBeNull();
+		expect(findAnswersQuad([mark(75, 550), mark(855, 550), mark(75, 1100), mark(500, 1100)], opciones)).toBeNull();
 	});
 
 	it("descarta el frame con menos de dos filas de marcas", () => {
@@ -232,7 +233,7 @@ describe("findAnswersQuad con la geometría de la hoja de 80", () => {
 	it("elige el par de filas cuya proporción es la del bloque", () => {
 		// En la hoja de 80 las tres filas traen dos marcas cada una, así que la
 		// proporción es lo único que distingue al bloque.
-		const quad = findAnswersQuad(
+		const encontrado = findAnswersQuad(
 			[mark(55, 180), mark(865, 180), mark(55, 550), mark(865, 550), mark(55, 1160), mark(865, 1160)],
 			{
 				rowTolerance: 40,
@@ -241,8 +242,18 @@ describe("findAnswersQuad con la geometría de la hoja de 80", () => {
 			}
 		);
 
-		expect(quad?.topLeft).toEqual({ x: 55, y: 550 });
-		expect(quad?.bottomRight).toEqual({ x: 865, y: 1160 });
+		expect(encontrado?.quad.topLeft).toEqual({ x: 55, y: 550 });
+		expect(encontrado?.quad.bottomRight).toEqual({ x: 865, y: 1160 });
+		expect(encontrado?.deduced).toBe(false);
+	});
+
+	it("marca como deducido el cuadrilátero al que le falta una marca de punta", () => {
+		const encontrado = findAnswersQuad(
+			[mark(75, 550), mark(480, 550), mark(75, 1100), mark(260, 1100), mark(670, 1100), mark(855, 1100)],
+			{ rowTolerance: 40, frameWidth: 935, frameHeight: 1210, tolerance: looseTolerance }
+		);
+
+		expect(encontrado?.deduced).toBe(true);
 	});
 });
 

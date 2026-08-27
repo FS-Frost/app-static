@@ -49,9 +49,23 @@ depende del teléfono, de la luz y de la costumbre:
 
 | Ancla | En qué se apoya | Cuándo conviene |
 | --- | --- | --- |
-| **Marcas, tolerante** (por defecto) | las marcas negras impresas, aguantando ángulo y distancia; deduce una esquina que falte | uso normal |
+| **Automático** (por defecto) | prueba todas las vías en cada frame hasta que una cierra | uso normal |
+| **Marcas, tolerante** | las marcas negras impresas, aguantando ángulo y distancia; deduce una esquina que falte | comparar |
 | **Marcas, estricto** | las mismas marcas, exigiendo hoja completa y de frente | cuando importa más no equivocarse que ir rápido |
 | **QR de la cabecera** | el QR, y afina con las marcas que se vean | cuando la hoja no entra entera en el cuadro |
+
+El ancla **Automático** es una cascada dentro del mismo frame, ordenada por lo que
+cuesta y por lo que suele funcionar:
+
+1. marcas de registro con el umbral de siempre;
+2. si eso no cierra, el QR (estimación + afinado con las marcas visibles);
+3. si tampoco, dos umbrales alternativos —uno más blando para hojas con poco
+   contraste, uno más duro para papel con brillo—.
+
+Las vías se ordenan por confianza antes de leer: un cuadrilátero con sus cuatro
+marcas a la vista se lee antes que uno con una esquina deducida, porque **leer es la
+mitad del costo de un frame** y conviene empezar por el que más probablemente cierre.
+La vía que funcionó se ve en el panel de depuración.
 
 El ancla QR merece una explicación: el QR es chico y está lejos del bloque de
 respuestas, así que estimar desde él amplifica el error —medido sobre una hoja
@@ -85,12 +99,20 @@ en vez de esperar a que le pongan la hoja perfecta:
   última posición. No es sólo velocidad — al recortar antes de reducir a 640 px, las
   marcas quedan más grandes en la imagen analizada, así que también se detecta mejor.
   Se suelta después de dos frames sin encontrar la hoja.
-- **Guía direccional**: rectángulo objetivo punteado, flecha hacia dónde mover el
-  teléfono y un diagnóstico corto ("la hoja se sale del cuadro", "acércate", "mira
-  la hoja de frente"). El criterio **no** es centrar el bloque de respuestas: quien
-  encuadra ve la hoja entera y el bloque vive en los dos tercios de abajo, así que
-  pedir centrado es pedir algo imposible. Lo que se exige es que entre completo, se
-  vea grande y esté de frente.
+- **Guía discreta**: rectángulo objetivo punteado y un diagnóstico corto ("la hoja
+  se sale del cuadro", "acércate", "mira la hoja de frente"). Nada de flechas: la
+  app se esfuerza sola y el texto sólo explica lo que falta. El criterio **no** es
+  centrar el bloque de respuestas: quien encuadra ve la hoja entera y el bloque vive
+  en los dos tercios de abajo, así que pedir centrado es pedir algo imposible. Lo que
+  se exige es que entre completo, se vea grande y esté de frente.
+- **Pista del QR para encontrar las marcas**: si un frame no ubica la hoja pero sí el
+  QR, la búsqueda del frame siguiente se acota a donde el QR dice que está el bloque.
+  Ahí las marcas aparecen mucho más grandes en la imagen analizada, y la hoja se
+  engancha al frame siguiente.
+- **Menos votos cuando el teléfono está quieto**: con dos lecturas idénticas y sin
+  movimiento no se espera el tercer voto. El consenso de tres sigue siendo el camino
+  normal, porque con la mano en movimiento dos frames seguidos pueden compartir el
+  mismo error.
 - **Autodisparo** en modo foto: se mide el movimiento entre frames sobre una
   miniatura de 32 px y, con la hoja encuadrada y dos lecturas seguidas quietas, se
   dispara solo. Mientras se encuadra, los frames de video se analizan **sin leer**
@@ -128,6 +150,43 @@ src/lib/scan/
   worker.ts             pipeline OpenCV (corre en un worker clásico)
   scanner.svelte.ts     cámara, worker y estado de la vista
 static/js/opencv-custom-build.js   build recortado de OpenCV.js (2,5 MB)
+```
+
+### Cuánto tarda en detectar
+
+Medido con la cámara falsa de Chrome (headless, en serie, mediana de tres corridas).
+"Total" va desde apretar *Abrir cámara* hasta tener la hoja leída; "1ª lectura" es
+desde que arranca el escaneo —o sea sin contar la apertura de la cámara—:
+
+| Caso | Total | 1ª lectura |
+| --- | --- | --- |
+| Hoja centrada, buena luz | 1,47 s | 0,61 s |
+| Hoja chica, torcida 7° y con sombra | 1,97 s | 0,57 s |
+| Hoja con la fila inferior de marcas fuera del cuadro | 1,99 s | 0,80 s |
+| Poca luz | 1,46 s | 0,66 s |
+
+Antes de este trabajo: 2,47 s / 2,90 s / **nunca detectaba** / 2,47 s. Lo que lo
+movió, en orden de impacto:
+
+- **El detector se precarga** al abrir la app (2,5 MB de wasm) y la cámara se abre en
+  paralelo, en vez de una espera detrás de la otra.
+- **La hoja rectificada bajó de 900 a 760 px de ancho**: las burbujas siguen en ~18 px
+  y rectificar, umbralizar y sacar contornos cuesta un 30% menos. La lectura era la
+  etapa más cara de cada frame.
+- **La grilla se reutiliza** entre frames consecutivos mientras el cuadrilátero se
+  mueva menos de un tercio de burbuja, y se rehace igual cada seis frames para no
+  arrastrar una deriva.
+- **La caja de cada contorno se lee de sus primeros 8 bytes** en vez de recorrer sus
+  puntos: el build antepone el bounding rect al contorno, y una hoja llena da ~1500
+  contornos.
+- **La cascada de vías** convirtió un caso que no se leía nunca en uno de ~2 s.
+- **Dos votos en vez de tres** cuando el teléfono está quieto.
+
+`tests/camara-velocidad.spec.ts` deja esto como guardia de regresión (con umbrales
+generosos, porque en CI corre junto al resto de la suite). Para medir en serio:
+
+```shell
+BENCH_VIDEO=/ruta/otro-caso.y4m bunx playwright test tests/camara-velocidad.spec.ts --project=movil
 ```
 
 ### El pipeline, por frame

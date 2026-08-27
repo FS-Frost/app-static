@@ -16,7 +16,7 @@
  *   5. Relleno de cada burbuja por conteo de píxeles oscuros y clasificación.
  */
 
-import type { Rect } from "./assist";
+import { roiFor, type Rect } from "./assist";
 import { classifyQuestion, type CellFill } from "./classify";
 import { getFormat, questionNumber, type SheetFormat } from "./format";
 import {
@@ -33,8 +33,8 @@ import { homographyRectToQuad, homographyToRect } from "./homography";
 import { detectWarpConvention, matrixForWarp, type WarpConvention } from "./warpConvention";
 import { buildGrid, type GridModel } from "./grid";
 import { loadOpenCv, type CvMat, type CvModule } from "./opencv";
-import { answersQuadFromQr, findQr, pointInQrFrame, qrTemplates, snapQuadToMarks } from "./qr";
-import { toleranceFor } from "./strategy";
+import { answersQuadFromQr, findQr, pointInQrFrame, qrTemplates, snapQuadToMarks, type QrSighting } from "./qr";
+import { looseTolerance, toleranceFor } from "./strategy";
 import type { FrameResult, ScanRequest, ScanResponse } from "./protocol";
 
 /** Ancho al que se reduce el frame para buscar las marcas de esquina. */
@@ -50,14 +50,30 @@ const LOCATE_WIDTH = 640;
  */
 const QR_WIDTH = 1280;
 
-/** Ancho de la hoja rectificada. Deja las burbujas en ~24 px, suficiente para medir relleno. */
-const PAGE_WIDTH = 900;
+/**
+ * Ancho de la hoja rectificada.
+ *
+ * Con 760 px las burbujas quedan en ~18 px, de sobra para medir relleno, y la
+ * rectificación, el umbral y los contornos cuestan un 30% menos que con 900. En un
+ * teléfono eso se nota: la lectura era la etapa más cara de cada frame.
+ */
+const PAGE_WIDTH = 760;
 
 /** Cuánto más oscuro que su vecindario tiene que ser un píxel para contar como marca. */
 const LOCATE_THRESHOLD_C = 25;
 
 /** Lo mismo, para los anillos impresos de las burbujas en la hoja rectificada. */
 const PAGE_THRESHOLD_C = 10;
+
+/**
+ * Umbrales de reserva para buscar marcas.
+ *
+ * Se prueban en el mismo frame cuando el de siempre no encuentra nada: uno más
+ * blando para hojas con poco contraste (fotocopia clara, poca luz) y uno más duro
+ * para papel con brillo. Cada reintento cuesta un umbral y unos contornos sobre una
+ * imagen de 640 px — bastante menos que hacer esperar al usuario otro segundo.
+ */
+const ALTERNATE_THRESHOLD_C = [12, 40];
 
 /** Radio de muestreo dentro de la burbuja, como fracción del radio detectado. */
 const SAMPLE_RADIUS_FACTOR = 0.62;
@@ -137,6 +153,9 @@ function emptyResult(reason: string, frameWidth: number, frameHeight: number, fo
 		qrQuad: null,
 		motion: 0,
 		searchRect: null,
+		hintRoi: null,
+		source: "",
+		attempts: 0,
 		timing: {
 			total: 0,
 			locate: 0,
@@ -146,47 +165,50 @@ function emptyResult(reason: string, frameWidth: number, frameHeight: number, fo
 	};
 }
 
-export type Shape = {
-	box: Box;
-	/** Esquinas del contorno por extremos de suma y diferencia de coordenadas. */
-	quad: Quad;
-};
-
 /**
- * Caja y esquinas de un contorno, leídas directo del heap.
+ * Caja envolvente de un contorno, leída de los primeros 8 bytes.
  *
- * OJO con el build custom de OpenCV: `findContours` **antepone el bounding rect
- * al contorno**, ocupando el primer par de int32 (x, y, ancho y alto como cuatro
- * uint16 big-endian). Es una optimización del build — ahorra una llamada a
- * `boundingRect` por contorno — pero significa que `data32S[0]` y `data32S[1]` NO
- * son un punto: los puntos reales empiezan en el índice 2. Leer desde 0 mete una
- * esquina en (-234736896, 234884352) y no encuentra hoja alguna.
+ * El build custom de OpenCV **antepone el bounding rect al contorno**: cuatro
+ * uint16 big-endian (x, y, ancho, alto) ocupando el primer par de int32, y los
+ * puntos reales empiezan en `data32S[2]`. Es una optimización del build —ahorra una
+ * llamada a `boundingRect` por contorno— y acá se aprovecha entera: leer 8 bytes
+ * es O(1), mientras recorrer los puntos de cada contorno costaba la mitad del
+ * tiempo de cada frame (una hoja llena da ~1500 contornos).
  *
- * La caja se recalcula desde los puntos igual: sale gratis en el mismo recorrido y
- * no depende de ese detalle del build.
+ * Si el rect viene vacío se recalcula desde los puntos, para no depender de ese
+ * detalle del build si algún día cambia.
  */
-function contourShape(contour: CvMat): Shape | null {
-	const points = contour.data32S;
-
-	// 2 valores del bounding rect que antepone el build + al menos 3 puntos.
-	if (points.length < 8) {
+function contourBox(contour: CvMat): Box | null {
+	const bytes = contour.data;
+	if (bytes.length < 8) {
 		return null;
 	}
 
-	const first = 2;
-	let minX = points[first];
-	let maxX = points[first];
-	let minY = points[first + 1];
-	let maxY = points[first + 1];
-	let topLeft = first;
-	let bottomRight = first;
-	let topRight = first;
-	let bottomLeft = first;
+	const width = (bytes[4] << 8) | bytes[5];
+	const height = (bytes[6] << 8) | bytes[7];
 
-	for (let i = first; i < points.length; i += 2) {
+	if (width > 0 && height > 0) {
+		return {
+			x: (bytes[0] << 8) | bytes[1],
+			y: (bytes[2] << 8) | bytes[3],
+			w: width,
+			h: height,
+		};
+	}
+
+	const points = contour.data32S;
+	if (points.length < 4) {
+		return null;
+	}
+
+	let minX = points[2];
+	let maxX = points[2];
+	let minY = points[3];
+	let maxY = points[3];
+
+	for (let i = 2; i < points.length; i += 2) {
 		const x = points[i];
 		const y = points[i + 1];
-
 		if (x < minX) {
 			minX = x;
 		}
@@ -202,37 +224,13 @@ function contourShape(contour: CvMat): Shape | null {
 		if (y > maxY) {
 			maxY = y;
 		}
-
-		if (x + y < points[topLeft] + points[topLeft + 1]) {
-			topLeft = i;
-		}
-
-		if (x + y > points[bottomRight] + points[bottomRight + 1]) {
-			bottomRight = i;
-		}
-
-		if (x - y > points[topRight] - points[topRight + 1]) {
-			topRight = i;
-		}
-
-		if (x - y < points[bottomLeft] - points[bottomLeft + 1]) {
-			bottomLeft = i;
-		}
 	}
 
 	return {
-		box: {
-			x: minX,
-			y: minY,
-			w: maxX - minX + 1,
-			h: maxY - minY + 1,
-		},
-		quad: {
-			topLeft: { x: points[topLeft], y: points[topLeft + 1] },
-			topRight: { x: points[topRight], y: points[topRight + 1] },
-			bottomRight: { x: points[bottomRight], y: points[bottomRight + 1] },
-			bottomLeft: { x: points[bottomLeft], y: points[bottomLeft + 1] },
-		},
+		x: minX,
+		y: minY,
+		w: maxX - minX + 1,
+		h: maxY - minY + 1,
 	};
 }
 
@@ -296,9 +294,18 @@ function ringMean(gray: CvMat, centerX: number, centerY: number, inner: number, 
 /**
  * Copia RGBA de una máscara/gris de un canal, que es lo que espera jsQR.
  */
+let rgbaBuffer: Uint8ClampedArray | null = null;
+
 function rgbaFromGray(gray: CvMat): Uint8ClampedArray {
 	const source = gray.data;
-	const rgba = new Uint8ClampedArray(source.length * 4);
+
+	// El búfer se reutiliza: son 4 bytes por píxel y a 1080x1080 son 4,6 MB por
+	// frame, que el recolector de basura acaba pagando en tirones.
+	if (rgbaBuffer == null || rgbaBuffer.length !== source.length * 4) {
+		rgbaBuffer = new Uint8ClampedArray(source.length * 4);
+	}
+
+	const rgba = rgbaBuffer;
 	for (let i = 0; i < source.length; i++) {
 		const offset = i * 4;
 		const value = source[i];
@@ -311,30 +318,30 @@ function rgbaFromGray(gray: CvMat): Uint8ClampedArray {
 	return rgba;
 }
 
-function collectShapes(module: CvModule, mask: CvMat, mode: number): Shape[] {
+function collectBoxes(module: CvModule, mask: CvMat, mode: number): Box[] {
 	if (pool == null) {
 		return [];
 	}
 
 	const contours = new module.MatVector();
-	const shapes: Shape[] = [];
+	const boxes: Box[] = [];
 
 	try {
 		module.findContours(mask, contours, pool.hierarchy, mode, module.CHAIN_APPROX_SIMPLE);
 		const total = contours.size();
 		for (let i = 0; i < total; i++) {
 			const contour = contours.get(i);
-			const shape = contourShape(contour);
+			const box = contourBox(contour);
 			contour.delete();
-			if (shape != null) {
-				shapes.push(shape);
+			if (box != null) {
+				boxes.push(box);
 			}
 		}
 	} finally {
 		contours.delete();
 	}
 
-	return shapes;
+	return boxes;
 }
 
 /**
@@ -596,6 +603,172 @@ function clampRect(rect: Rect | null, frameWidth: number, frameHeight: number): 
 	return { x, y, width, height };
 }
 
+type Attempt = {
+	/** De dónde salió el cuadrilátero: sirve para saber qué vía funcionó. */
+	label: string;
+	/** Esquinas en coordenadas del frame. */
+	quad: Quad;
+	aspect: number;
+	/**
+	 * Qué tan respaldado está por lo que se vio. Los intentos se leen en este orden:
+	 * leer cuesta la mitad del frame, así que conviene empezar por el que más
+	 * probablemente cierre.
+	 */
+	confidence: number;
+};
+
+type ReadOutcome = {
+	ok: boolean;
+	reason: string;
+	answers: string[];
+	fills: number[][];
+	grid: GridModel | null;
+	gridDebug: string;
+	pageWidth: number;
+	pageHeight: number;
+};
+
+/**
+ * Rectifica con un cuadrilátero y trata de leer. Devuelve el motivo si no cierra,
+ * para que quien llama pueda probar la vía siguiente.
+ */
+/**
+ * Grilla de la última lectura buena, para no reconstruirla en cada frame.
+ *
+ * Entre dos frames consecutivos la hoja se mueve unos píxeles, y la grilla se
+ * rectifica al mismo rectángulo: reconstruirla cuesta un umbral adaptativo y ~1500
+ * contornos, la mitad del costo de leer. Se reutiliza mientras el cuadrilátero
+ * apenas se mueva, y se rehace igual cada cierto número de frames para no arrastrar
+ * un error si la hoja fue derivando de a poco.
+ */
+const gridCache: {
+	grid: GridModel | null;
+	quad: Quad | null;
+	formatId: string;
+	pageWidth: number;
+	pageHeight: number;
+	reuses: number;
+} = { grid: null, quad: null, formatId: "", pageWidth: 0, pageHeight: 0, reuses: 0 };
+
+/** Cuántas veces seguidas se puede reutilizar una grilla antes de rehacerla. */
+const MAX_GRID_REUSES = 6;
+
+function quadDrift(a: Quad, b: Quad): number {
+	return Math.max(
+		Math.hypot(a.topLeft.x - b.topLeft.x, a.topLeft.y - b.topLeft.y),
+		Math.hypot(a.topRight.x - b.topRight.x, a.topRight.y - b.topRight.y),
+		Math.hypot(a.bottomRight.x - b.bottomRight.x, a.bottomRight.y - b.bottomRight.y),
+		Math.hypot(a.bottomLeft.x - b.bottomLeft.x, a.bottomLeft.y - b.bottomLeft.y)
+	);
+}
+
+function tryRead(module: CvModule, format: SheetFormat, attempt: Attempt): ReadOutcome {
+	const failed: ReadOutcome = {
+		ok: false,
+		reason: "no se pudo rectificar la hoja",
+		answers: [],
+		fills: [],
+		grid: null,
+		gridDebug: "",
+		pageWidth: 0,
+		pageHeight: 0,
+	};
+
+	if (pool == null) {
+		return failed;
+	}
+
+	const warped = warpPage(module, pool.gray, attempt.quad, attempt.aspect);
+	if (warped == null) {
+		return failed;
+	}
+
+	// ¿Sirve la grilla del frame anterior? El cuadrilátero tiene que haberse movido
+	// menos de un tercio de burbuja, que es donde el muestreo sigue cayendo dentro.
+	const cachePutoAlDia =
+		gridCache.grid != null &&
+		gridCache.quad != null &&
+		gridCache.formatId === format.id &&
+		gridCache.pageWidth === warped.pageWidth &&
+		gridCache.pageHeight === warped.pageHeight &&
+		gridCache.reuses < MAX_GRID_REUSES &&
+		quadDrift(gridCache.quad, attempt.quad) <= gridCache.grid.radius * 0.6;
+
+	if (cachePutoAlDia && gridCache.grid != null) {
+		gridCache.reuses++;
+		gridCache.quad = attempt.quad;
+		const reading = readAnswers(format, gridCache.grid, pool.page);
+
+		return {
+			ok: true,
+			reason: "",
+			answers: reading.answers,
+			fills: reading.fills,
+			grid: gridCache.grid,
+			gridDebug: `grilla reutilizada (${gridCache.reuses}/${MAX_GRID_REUSES})`,
+			pageWidth: warped.pageWidth,
+			pageHeight: warped.pageHeight,
+		};
+	}
+
+	// Umbral adaptativo de bloque chico (~3% del ancho) sólo para la geometría:
+	// resalta los anillos impresos aunque la foto tenga sombra. El relleno NO se
+	// mide sobre esta máscara — se mide en gris, contra el papel de alrededor.
+	const blockSize = Math.max(3, Math.round(warped.pageWidth * 0.03) | 1);
+	module.adaptiveThreshold(
+		pool.page,
+		pool.pageEdges,
+		255,
+		module.ADAPTIVE_THRESH_MEAN_C,
+		module.THRESH_BINARY_INV,
+		blockSize,
+		PAGE_THRESHOLD_C
+	);
+
+	const pageBoxes = collectBoxes(module, pool.pageEdges, module.RETR_LIST);
+	const gridResult = buildGrid(
+		pageBoxes,
+		format,
+		{
+			pageWidth: warped.pageWidth,
+			pageHeight: warped.pageHeight,
+		}
+	);
+
+	if (gridResult.grid == null) {
+		gridCache.grid = null;
+		return {
+			...failed,
+			reason: gridResult.reason,
+			gridDebug: gridResult.debug,
+			pageWidth: warped.pageWidth,
+			pageHeight: warped.pageHeight,
+		};
+	}
+
+	const reading = readAnswers(format, gridResult.grid, pool.page);
+	gridCache.grid = gridResult.grid;
+	gridCache.quad = attempt.quad;
+	gridCache.formatId = format.id;
+	gridCache.pageWidth = warped.pageWidth;
+	gridCache.pageHeight = warped.pageHeight;
+	gridCache.reuses = 0;
+
+	return {
+		ok: true,
+		reason: "",
+		answers: reading.answers,
+		fills: reading.fills,
+		grid: gridResult.grid,
+		gridDebug: gridResult.debug,
+		pageWidth: warped.pageWidth,
+		pageHeight: warped.pageHeight,
+	};
+}
+
+/** Tiempos por etapa. Sólo se miran depurando, y son la forma de no optimizar a ciegas. */
+const etapas = { gris: 0, mascara: 0, qr: 0, lectura: 0, movimiento: 0 };
+
 function processFrame(module: CvModule, request: Extract<ScanRequest, { type: "frame" }>): void {
 	const format = getFormat(request.formatId);
 	const bitmap = request.bitmap;
@@ -632,6 +805,7 @@ function processFrame(module: CvModule, request: Extract<ScanRequest, { type: "f
 		};
 	}
 
+	const tGris = performance.now();
 	const imageData = context.getImageData(0, 0, frameWidth, frameHeight);
 	const source = module.matFromImageData(imageData);
 
@@ -641,8 +815,11 @@ function processFrame(module: CvModule, request: Extract<ScanRequest, { type: "f
 		source.delete();
 	}
 
+	etapas.gris = performance.now() - tGris;
+
 	const search = clampRect(request.roi, frameWidth, frameHeight);
-	const region = search == null ? pool.gray : pool.gray.roi(new module.Rect(search.x, search.y, search.width, search.height));
+	const region =
+		search == null ? pool.gray : pool.gray.roi(new module.Rect(search.x, search.y, search.width, search.height));
 	const searchWidth = search?.width ?? frameWidth;
 	const searchHeight = search?.height ?? frameHeight;
 
@@ -661,43 +838,20 @@ function processFrame(module: CvModule, request: Extract<ScanRequest, { type: "f
 		}
 	}
 
-	// Umbral adaptativo con bloque de ~2,5 veces la marca y un C alto.
-	//
-	// El bloque tiene que superar a la marca (si no, el promedio local se vuelve
-	// negro dentro del cuadrado y la marca se borra) pero no puede ser tan grande
-	// como para que una sombra suave del ambiente entre como "oscuro": con bloque
-	// gigante las fotos con sombra se llenan de manchas que se fusionan con las
-	// marcas. El C alto es lo que deja fuera esa sombra.
 	module.GaussianBlur(pool.small, pool.small, new module.Size(3, 3), 0);
-	const locateBlock = Math.max(3, Math.round(pool.small.cols * 0.1) | 1);
-	module.adaptiveThreshold(
-		pool.small,
-		pool.smallBin,
-		255,
-		module.ADAPTIVE_THRESH_MEAN_C,
-		module.THRESH_BINARY_INV,
-		locateBlock,
-		// OpenCV umbraliza contra `media - C`, así que para marcar lo OSCURO el C va
-		// positivo: un C negativo baja el umbral por debajo del papel y marca la hoja
-		// entera.
-		LOCATE_THRESHOLD_C
-	);
 
-	const smallShapes = collectShapes(module, pool.smallBin, module.RETR_LIST);
-	const markers = findRegistrationMarks(
-		smallShapes.map((shape) => shape.box),
-		pool.smallBin
-	);
-
+	etapas.mascara = 0;
+	etapas.qr = 0;
 	const result = emptyResult("", frameWidth, frameHeight, format);
+	const tMovimiento = performance.now();
 	result.motion = measureMotion(module, pool.gray);
+	etapas.movimiento = performance.now() - tMovimiento;
 	result.searchRect = search;
+
 	const scale = LOCATE_WIDTH / searchWidth;
 	const offsetX = search?.x ?? 0;
 	const offsetY = search?.y ?? 0;
 	const aFrame = (point: Point): Point => ({ x: offsetX + point.x / scale, y: offsetY + point.y / scale });
-	// Y la vuelta: el QR se busca sobre el frame completo, así que su estimación hay
-	// que traerla al sistema de la copia recortada donde viven las marcas.
 	const aSmall = (point: Point): Point => ({ x: (point.x - offsetX) * scale, y: (point.y - offsetY) * scale });
 	const quadAFrame = (quad: Quad): Quad => ({
 		topLeft: aFrame(quad.topLeft),
@@ -706,87 +860,197 @@ function processFrame(module: CvModule, request: Extract<ScanRequest, { type: "f
 		bottomLeft: aFrame(quad.bottomLeft),
 	});
 
-	// Las marcas van siempre al resultado, no sólo depurando: el overlay las dibuja
-	// para que el usuario vea qué está viendo la app mientras encuadra.
+	const tolerance = toleranceFor(request.anchor);
+	const rowTolerance = pool.small.rows * 0.04;
+	const attempts: Attempt[] = [];
+	let lastReason = "no se ven las marcas de la hoja";
+
+	/** Busca las marcas con un umbral dado y agrega el intento si el cuadrilátero sirve. */
+	const intentarMarcas = (thresholdC: number, label: string): Box[] => {
+		if (pool == null) {
+			return [];
+		}
+
+		const inicio = performance.now();
+
+		const locateBlock = Math.max(3, Math.round(pool.small.cols * 0.1) | 1);
+		module.adaptiveThreshold(
+			pool.small,
+			pool.smallBin,
+			255,
+			module.ADAPTIVE_THRESH_MEAN_C,
+			module.THRESH_BINARY_INV,
+			locateBlock,
+			// OpenCV umbraliza contra `media - C`: para marcar lo OSCURO el C va positivo.
+			thresholdC
+		);
+
+			const marks = findRegistrationMarks(collectBoxes(module, pool.smallBin, module.RETR_LIST), pool.smallBin);
+
+		const quad = findAnswersQuad(marks, {
+			rowTolerance,
+			frameWidth: pool.small.cols,
+			frameHeight: pool.small.rows,
+			tolerance,
+		});
+
+		etapas.mascara += performance.now() - inicio;
+
+		if (quad != null) {
+			const check = checkQuad(quad.quad, pool.small.cols, pool.small.rows, answersBlockAspect, tolerance);
+			if (check.valid) {
+				attempts.push({
+					label: quad.deduced ? `${label} (esquina deducida)` : label,
+					quad: quadAFrame(quad.quad),
+					aspect: check.aspect,
+					// Una esquina deducida es una apuesta: si además hay QR, conviene leer
+					// primero la vía del QR, que sí vio dónde está la hoja.
+					confidence: quad.deduced ? 1.5 : 3,
+				});
+			} else {
+				lastReason = check.reason;
+			}
+		}
+
+		return marks;
+	};
+
+	const usaMarcas = request.anchor !== "qr";
+	const markers = usaMarcas ? intentarMarcas(LOCATE_THRESHOLD_C, "marcas") : [];
 	result.marks = markers.map((box) => aFrame({ x: box.x + box.w / 2, y: box.y + box.h / 2 }));
 
-	const tolerance = toleranceFor(request.anchor);
-	const buscaQr = request.anchor === "qr" || request.debug;
-	let qrSighting: ReturnType<typeof findQr> = null;
-	let qrScale = 1;
+	// El estado del QR va en un objeto y no en variables sueltas: se asigna dentro de
+	// una función y TypeScript, que no sigue asignaciones en closures, daría por nula
+	// una variable que sí tiene valor.
+	const qr: { sighting: QrSighting | null; scale: number; snapped: number; searched: boolean } = {
+		sighting: null,
+		scale: 1,
+		snapped: 0,
+		searched: false,
+	};
 
-	if (buscaQr) {
+	/**
+	 * Busca el QR y, si aparece, agrega su estimación como una vía más.
+	 *
+	 * Es perezoso a propósito: buscar el símbolo cuesta un resize a 1280 px y un
+	 * pasada de jsQR, y la mayoría de los frames se resuelven con las marcas. Se llama
+	 * cuando las marcas no dan nada Y también cuando dan algo que después no se puede
+	 * leer, que es el caso de una hoja cortada por abajo: las marcas producen un
+	 * cuadrilátero plausible, la grilla no cierra, y el QR sí sabe dónde está el bloque.
+	 */
+	const buscarQr = (): void => {
+		if (qr.searched || pool == null) {
+			return;
+		}
+
+		qr.searched = true;
+		const inicioQr = performance.now();
 		const qrWidth = Math.min(frameWidth, QR_WIDTH);
-		qrScale = qrWidth / frameWidth;
+		qr.scale = qrWidth / frameWidth;
 		module.resize(
 			pool.gray,
 			pool.qr,
-			new module.Size(qrWidth, Math.max(1, Math.round(frameHeight * qrScale))),
+			new module.Size(qrWidth, Math.max(1, Math.round(frameHeight * qr.scale))),
 			0,
 			0,
 			module.INTER_AREA
 		);
 
-		qrSighting = findQr(rgbaFromGray(pool.qr), pool.qr.cols, pool.qr.rows);
-		if (qrSighting != null) {
-			result.qrQuad = {
-				topLeft: { x: qrSighting.quad.topLeft.x / qrScale, y: qrSighting.quad.topLeft.y / qrScale },
-				topRight: { x: qrSighting.quad.topRight.x / qrScale, y: qrSighting.quad.topRight.y / qrScale },
-				bottomRight: { x: qrSighting.quad.bottomRight.x / qrScale, y: qrSighting.quad.bottomRight.y / qrScale },
-				bottomLeft: { x: qrSighting.quad.bottomLeft.x / qrScale, y: qrSighting.quad.bottomLeft.y / qrScale },
-			};
+		qr.sighting = findQr(rgbaFromGray(pool.qr), pool.qr.cols, pool.qr.rows);
+		etapas.qr = performance.now() - inicioQr;
+		const visto = qr.sighting;
+
+		if (visto == null) {
+			if (request.anchor === "qr") {
+				lastReason = "no se ve el QR de la cabecera";
+			}
+
+			return;
 		}
+
+		result.qrQuad = {
+			topLeft: { x: visto.quad.topLeft.x / qr.scale, y: visto.quad.topLeft.y / qr.scale },
+			topRight: { x: visto.quad.topRight.x / qr.scale, y: visto.quad.topRight.y / qr.scale },
+			bottomRight: { x: visto.quad.bottomRight.x / qr.scale, y: visto.quad.bottomRight.y / qr.scale },
+			bottomLeft: { x: visto.quad.bottomLeft.x / qr.scale, y: visto.quad.bottomLeft.y / qr.scale },
+		};
+
+		const estimado = answersQuadFromQr(visto.quad, qrTemplates[format.id]);
+		if (estimado == null) {
+			return;
+		}
+
+		const enFrame: Quad = {
+			topLeft: { x: estimado.topLeft.x / qr.scale, y: estimado.topLeft.y / qr.scale },
+			topRight: { x: estimado.topRight.x / qr.scale, y: estimado.topRight.y / qr.scale },
+			bottomRight: { x: estimado.bottomRight.x / qr.scale, y: estimado.bottomRight.y / qr.scale },
+			bottomLeft: { x: estimado.bottomLeft.x / qr.scale, y: estimado.bottomLeft.y / qr.scale },
+		};
+
+		// La estimación del QR se desvía varios píxeles: cada marca cercana a una
+		// esquina la corrige a su valor exacto.
+		const ajuste = snapQuadToMarks(
+			{
+				topLeft: aSmall(enFrame.topLeft),
+				topRight: aSmall(enFrame.topRight),
+				bottomRight: aSmall(enFrame.bottomRight),
+				bottomLeft: aSmall(enFrame.bottomLeft),
+			},
+			markers.map((box) => ({ x: box.x + box.w / 2, y: box.y + box.h / 2 })),
+			pool.small.cols * 0.06
+		);
+
+		qr.snapped = ajuste.snapped;
+
+		// El QR también sirve como pista de dónde buscar en el frame siguiente: si nada
+		// funciona, el hilo principal acota ahí la búsqueda y las marcas aparecen más
+		// grandes en la imagen analizada.
+		result.hintRoi = roiFor(quadAFrame(ajuste.quad), { width: frameWidth, height: frameHeight }, 0.12);
+
+		const check = checkQuad(ajuste.quad, pool.small.cols, pool.small.rows, answersBlockAspect, looseTolerance);
+		if (check.valid) {
+			attempts.push({
+				label: `qr (${qr.snapped}/4 afinadas)`,
+				quad: quadAFrame(ajuste.quad),
+				aspect: check.aspect,
+				confidence: 1 + qr.snapped * 0.4,
+			});
+		} else {
+			lastReason = check.reason;
+		}
+	};
+
+	const usaQr = request.anchor === "qr" || request.anchor === "auto" || request.debug;
+
+	if (usaQr && (attempts.length === 0 || request.anchor === "qr" || request.debug)) {
+		buscarQr();
 	}
 
-	const marksQuad = findAnswersQuad(markers, {
-		rowTolerance: pool.small.rows * 0.04,
-		frameWidth: pool.small.cols,
-		frameHeight: pool.small.rows,
-		tolerance,
-	});
-
-	// Con ancla QR: el QR estima dónde está el bloque y las marcas que se vean
-	// corrigen las esquinas. Sin esa corrección la estimación se desvía lo suficiente
-	// para que la grilla no cierre; con ella, basta que aparezca alguna marca.
-	let qrSnapped = 0;
-	let smallQuad: Quad | null = marksQuad;
-
-	if (request.anchor === "qr") {
-		smallQuad = null;
-
-		if (qrSighting != null) {
-			const estimado = answersQuadFromQr(qrSighting.quad, qrTemplates[format.id]);
-			if (estimado != null) {
-				const enSmall: Quad = {
-					topLeft: aSmall({ x: estimado.topLeft.x / qrScale, y: estimado.topLeft.y / qrScale }),
-					topRight: aSmall({ x: estimado.topRight.x / qrScale, y: estimado.topRight.y / qrScale }),
-					bottomRight: aSmall({ x: estimado.bottomRight.x / qrScale, y: estimado.bottomRight.y / qrScale }),
-					bottomLeft: aSmall({ x: estimado.bottomLeft.x / qrScale, y: estimado.bottomLeft.y / qrScale }),
-				};
-
-				const ajuste = snapQuadToMarks(
-					enSmall,
-					markers.map((box) => ({ x: box.x + box.w / 2, y: box.y + box.h / 2 })),
-					pool.small.cols * 0.06
-				);
-
-				qrSnapped = ajuste.snapped;
-				smallQuad = ajuste.quad;
+	// Última vía: umbrales alternativos. Una hoja con poco contraste o con brillo
+	// puede no dar marcas con el umbral por omisión, y probar otros dos sale más
+	// barato que hacer esperar al usuario un segundo más.
+	if (attempts.length === 0 && usaMarcas && request.anchor !== "marcas-estricto") {
+		for (const thresholdC of ALTERNATE_THRESHOLD_C) {
+			const marcas = intentarMarcas(thresholdC, `marcas C${thresholdC}`);
+			if (attempts.length > 0) {
+				result.marks = marcas.map((box) => aFrame({ x: box.x + box.w / 2, y: box.y + box.h / 2 }));
+				break;
 			}
 		}
 	}
 
+	attempts.sort((a, b) => b.confidence - a.confidence);
 	result.timing.locate = performance.now() - startedAt;
+	result.attempts = attempts.length;
 
-	if (smallQuad == null) {
-		result.reason =
-			request.anchor === "qr" ? "no se ve el QR de la cabecera" : "no se ven las marcas de la hoja";
+	if (attempts.length === 0) {
+		result.reason = lastReason;
 
 		if (request.debug) {
-			const filas = markRows(markers, pool.small.rows * 0.04, tolerance.completeCorners ? 1 : 2)
+			const filas = markRows(markers, rowTolerance, tolerance.completeCorners ? 1 : 2)
 				.map((row) => `y=${row.center.toFixed(0)} n=${row.count} w=${row.width.toFixed(0)}`)
 				.join(" | ");
-			result.reason += ` · contornos ${smallShapes.length} · marcas ${markers.length} · filas ${filas}`;
+			result.reason += ` · marcas ${markers.length} · filas ${filas}${qr.sighting == null ? "" : " · qr visto"}`;
 			const mask = renderMaskImage(pool.smallBin, markers);
 			result.timing.total = performance.now() - startedAt;
 			post({ type: "result", frameId: request.frameId, result, debugImage: mask }, mask == null ? [] : [mask]);
@@ -798,127 +1062,94 @@ function processFrame(module: CvModule, request: Extract<ScanRequest, { type: "f
 		return;
 	}
 
-	const check = checkQuad(smallQuad, pool.small.cols, pool.small.rows, answersBlockAspect, tolerance);
-	if (!check.valid) {
-		result.reason = check.reason;
-		result.timing.total = performance.now() - startedAt;
-		post({ type: "result", frameId: request.frameId, result, debugImage: null });
-		return;
-	}
-
-	const quad: Quad = quadAFrame(smallQuad);
-	result.quad = quad;
-
 	// Sondeo de encuadre: con la hoja ubicada ya está todo lo que necesita la
 	// asistencia. Rectificar y leer sería gastar batería en un frame que nadie va a
 	// usar.
+	result.quad = attempts[0].quad;
+	result.source = attempts[0].label;
+
 	if (!request.read) {
 		result.timing.total = performance.now() - startedAt;
 		post({ type: "result", frameId: request.frameId, result, debugImage: null });
 		return;
 	}
 
-	const warpStartedAt = performance.now();
-	const warped = warpPage(module, pool.gray, quad, check.aspect);
-	result.timing.warp = performance.now() - warpStartedAt;
-	if (warped == null) {
-		result.reason = "no se pudo rectificar la hoja";
-		result.timing.total = performance.now() - startedAt;
-		post({ type: "result", frameId: request.frameId, result, debugImage: null });
-		return;
+	const readStartedAt = performance.now();
+	let outcome: ReadOutcome | null = null;
+
+	for (let i = 0; i < attempts.length; i++) {
+		const attempt = attempts[i];
+		const intento = tryRead(module, format, attempt);
+		if (intento.ok) {
+			result.quad = attempt.quad;
+			result.source = attempt.label;
+			outcome = intento;
+			break;
+		}
+
+		if (outcome == null || !outcome.ok) {
+			outcome = intento;
+			result.quad = attempt.quad;
+			result.source = attempt.label;
+		}
+
+		// Se agotaron las vías conocidas: el QR puede aportar una más. Pasa con una
+		// hoja cortada por abajo, donde las marcas dan un cuadrilátero que parece
+		// bueno y la grilla no cierra.
+		if (i === attempts.length - 1 && usaQr && !qr.searched) {
+			buscarQr();
+		}
 	}
 
-	const readStartedAt = performance.now();
+	result.attempts = attempts.length;
 
-	// Umbral adaptativo de bloque chico (~3% del ancho) sólo para la geometría:
-	// resalta los anillos impresos aunque la foto tenga sombra. El relleno NO se
-	// mide sobre esta máscara — se mide en gris, contra el papel de alrededor.
-	const blockSize = Math.max(3, Math.round(warped.pageWidth * 0.03) | 1);
-	module.adaptiveThreshold(
-		pool.page,
-		pool.pageEdges,
-		255,
-		module.ADAPTIVE_THRESH_MEAN_C,
-		module.THRESH_BINARY_INV,
-		blockSize,
-		PAGE_THRESHOLD_C
-	);
-
-	const pageShapes = collectShapes(module, pool.pageEdges, module.RETR_LIST);
-	const gridResult = buildGrid(
-		pageShapes.map((shape) => shape.box),
-		format,
-		{
-			pageWidth: warped.pageWidth,
-			pageHeight: warped.pageHeight,
-		}
-	);
-
+	result.timing.read = performance.now() - readStartedAt;
 	let debugImage: ImageBitmap | null = null;
 
-	if (gridResult.grid == null) {
+	if (outcome == null || !outcome.ok) {
 		result.reason = request.debug
-			? `${gridResult.reason} · ${gridResult.debug} · hoja ${pool.page.cols}x${pool.page.rows} · esquinas ` +
-				[quad.topLeft, quad.topRight, quad.bottomRight, quad.bottomLeft]
-					.map((punto) => `(${punto.x.toFixed(0)},${punto.y.toFixed(0)})`)
-					.join(" ") +
-				` · candidatas ${gridResult.candidates.length}`
-			: gridResult.reason;
-		result.timing.read = performance.now() - readStartedAt;
+			? `${outcome?.reason ?? "no se pudo leer"} · vías ${attempts.map((a) => a.label).join(", ")} · ${outcome?.gridDebug ?? ""}`
+			: (outcome?.reason ?? "no se pudo leer la hoja");
+
 		result.timing.total = performance.now() - startedAt;
-		if (request.debug) {
+		if (request.debug && outcome != null && outcome.pageWidth > 0) {
 			debugImage = renderDebugImage(pool.page, null, 0);
 		}
 
-		post(
-			{ type: "result", frameId: request.frameId, result, debugImage },
-			debugImage == null ? [] : [debugImage]
-		);
+		post({ type: "result", frameId: request.frameId, result, debugImage }, debugImage == null ? [] : [debugImage]);
 		return;
 	}
 
-	const reading = readAnswers(format, gridResult.grid, pool.page);
 	result.ok = true;
+	result.answers = outcome.answers;
+	result.fills = outcome.fills;
+
 	if (request.debug) {
-		const grid = gridResult.grid;
-		const filas = `${grid.rowCenters[0].toFixed(1)}..${grid.rowCenters[grid.rowCenters.length - 1].toFixed(1)}`;
-		const columnas = grid.blockColumns.map((columns) => columns.map((x) => x.toFixed(1)).join("/")).join(" | ");
+		const grid = outcome.grid;
+		let plantilla = request.anchor === "qr" ? ` · esquinas afinadas ${qr.snapped}/4` : "";
+
 		// Con el QR y las marcas en el mismo frame se puede medir la plantilla del QR:
 		// son las coordenadas de las esquinas del bloque en el marco del símbolo.
-		let plantilla = request.anchor === "qr" ? ` · esquinas afinadas ${qrSnapped}/4` : "";
-		if (qrSighting != null && marksQuad != null) {
-			// Las marcas vienen en coordenadas de la copia de 640 y el QR en las de su
-			// propia copia: hay que llevar unas al espacio de las otras o la medición sale
-			// escalada.
-			const aQr = (punto: Point): Point => {
-				const enFrame = aFrame(punto);
-				return { x: enFrame.x * qrScale, y: enFrame.y * qrScale };
-			};
-			const esquinas = [marksQuad.topLeft, marksQuad.topRight, marksQuad.bottomRight, marksQuad.bottomLeft]
-				.map((punto) => pointInQrFrame(qrSighting.quad, aQr(punto)))
+		const visto = qr.sighting;
+		if (visto != null && result.quad != null && result.source.startsWith("marcas")) {
+			const aQr = (punto: Point): Point => ({ x: punto.x * qr.scale, y: punto.y * qr.scale });
+			const esquinas = [result.quad.topLeft, result.quad.topRight, result.quad.bottomRight, result.quad.bottomLeft]
+				.map((punto) => pointInQrFrame(visto.quad, aQr(punto)))
 				.map((punto) => `(${punto.x.toFixed(2)},${punto.y.toFixed(2)})`)
 				.join(" ");
-			// El contenido del QR identifica la prueba y el alumno: no se escribe en
-			// ninguna salida, ni siquiera depurando.
-			plantilla = ` · plantillaQR ${esquinas} · qr ${qrSighting.text.length} chars`;
+			// El contenido del QR identifica la prueba y el alumno: no se escribe nunca.
+			plantilla = ` · plantillaQR ${esquinas} · qr ${visto.text.length} chars`;
 		}
 
 		result.reason =
-			`${gridResult.debug}${plantilla} · warp ${warpConvention?.label ?? "?"} · hoja ${pool.page.cols}x${pool.page.rows} · r=${grid.radius.toFixed(1)} · ` +
-			`filas ${filas} · cols ${columnas} · esquinas (${quad.topLeft.x.toFixed(0)},${quad.topLeft.y.toFixed(0)}) ` +
-			`(${quad.topRight.x.toFixed(0)},${quad.topRight.y.toFixed(0)}) (${quad.bottomRight.x.toFixed(0)},${quad.bottomRight.y.toFixed(0)}) ` +
-			`(${quad.bottomLeft.x.toFixed(0)},${quad.bottomLeft.y.toFixed(0)}) · frame ${frameWidth}x${frameHeight} · asp ${check.aspect.toFixed(2)}`;
+			`vía ${result.source} · etapas gris ${etapas.gris.toFixed(0)} máscaras ${etapas.mascara.toFixed(0)} qr ${etapas.qr.toFixed(0)} mov ${etapas.movimiento.toFixed(0)} · ${outcome.gridDebug}${plantilla} · warp ${warpConvention?.label ?? "?"} · ` +
+			`hoja ${outcome.pageWidth}x${outcome.pageHeight} · r=${grid?.radius.toFixed(1) ?? "?"} · ` +
+			`frame ${frameWidth}x${frameHeight}`;
+
+		debugImage = renderDebugImage(pool.page, grid, (grid?.radius ?? 0) * SAMPLE_RADIUS_FACTOR);
 	}
 
-	result.answers = reading.answers;
-	result.fills = reading.fills;
-	result.timing.read = performance.now() - readStartedAt;
 	result.timing.total = performance.now() - startedAt;
-
-	if (request.debug) {
-		debugImage = renderDebugImage(pool.page, gridResult.grid, gridResult.grid.radius * SAMPLE_RADIUS_FACTOR);
-	}
-
 	post({ type: "result", frameId: request.frameId, result, debugImage }, debugImage == null ? [] : [debugImage]);
 }
 

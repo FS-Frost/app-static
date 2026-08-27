@@ -11,7 +11,7 @@ import {
 	type Rect,
 	type ZoomRange,
 } from "./assist";
-import { voteAnswers, type VoteResult } from "./classify";
+import { lastTwoAgree, voteAnswers, type VoteResult } from "./classify";
 import { getFormat, type FormatId, type SheetFormat } from "./format";
 import type { Point, Quad } from "./geometry";
 import { defaultAnchor, defaultCapture, type Anchor, type Capture } from "./strategy";
@@ -99,12 +99,16 @@ export class Scanner {
 	/** Auto-encuadre: seguimiento, zoom, enfoque dirigido, guía y autodisparo. */
 	assist = $state<boolean>(true);
 	/** Qué hacer para encuadrar mejor. */
-	guidance = $state<Guidance>({ message: "", nudge: null, framed: false });
+	guidance = $state<Guidance>({ message: "", framed: false });
 	/** Rectángulo donde conviene que caiga la hoja, en coordenadas del frame. */
 	target = $state<Rect | null>(null);
 	/** Zona que el worker analizó: si es distinta del frame, el seguimiento está activo. */
 	searchRect = $state<Rect | null>(null);
 	zoom = $state<number>(0);
+	/** Frames procesados desde que se abrió la cámara. */
+	framesTried = $state<number>(0);
+	/** Milisegundos hasta la primera lectura válida. Es la métrica que importa al encuadrar. */
+	msToFirstRead = $state<number>(0);
 	/** true mientras el worker procesa un frame. */
 	busy = $state<boolean>(false);
 
@@ -112,6 +116,7 @@ export class Scanner {
 	minVotes = $derived<number>(this.capture === "foto" ? MIN_VOTES_PHOTO : MIN_VOTES);
 
 	#worker: Worker | null = null;
+	#workerReady: Promise<void> | null = null;
 	#video: HTMLVideoElement | null = null;
 	#stream: MediaStream | null = null;
 	#history: string[][] = [];
@@ -130,35 +135,60 @@ export class Scanner {
 	#stillFrames = 0;
 	#autoShotDone = false;
 	#hadQuad = false;
+	#scanStartedAt = 0;
+
+	/**
+	 * Arranca el worker antes de que haga falta.
+	 *
+	 * El detector son 2,5 MB de wasm: cargarlo recién al abrir la cámara le sumaba
+	 * casi un segundo al tiempo hasta la primera lectura. Se llama al entrar a la app,
+	 * mientras el usuario elige el formato.
+	 */
+	preload(): void {
+		void this.#ensureWorker().catch(() => {
+			// Si falla acá se reintenta al abrir la cámara, y ahí sí se avisa.
+		});
+	}
+
+	/**
+	 * Devuelve la promesa de que el worker esté listo, creándolo si hace falta.
+	 *
+	 * Una sola promesa compartida: si cada llamada resolviera por su cuenta al ver
+	 * que el worker ya existe, mandaría frames mientras OpenCV todavía se carga y el
+	 * worker los rechazaría.
+	 */
+	#ensureWorker(): Promise<void> {
+		if (this.#workerReady == null) {
+			this.#workerReady = this.#startWorker();
+			this.#workerReady.catch(() => {
+				this.#workerReady = null;
+			});
+		}
+
+		return this.#workerReady;
+	}
 
 	async start(video: HTMLVideoElement, formatId: FormatId): Promise<void> {
-		this.stop();
+		this.#stopScanning();
 		this.formatId = formatId;
 		this.reset();
 		this.status = "cargando";
 		this.message = "abriendo la cámara";
 		this.#video = video;
 
+		// Cámara y detector se preparan en paralelo: son dos esperas independientes y
+		// juntas eran la mayor parte del tiempo hasta la primera lectura.
 		try {
-			await this.#openCamera(video);
+			await Promise.all([this.#openCamera(video), this.#ensureWorker()]);
 		} catch (error) {
 			this.status = "error";
 			this.message = error instanceof Error ? error.message : "no se pudo abrir la cámara";
 			return;
 		}
 
-		this.message = "cargando el detector";
-
-		try {
-			await this.#startWorker();
-		} catch (error) {
-			this.status = "error";
-			this.message = error instanceof Error ? error.message : "no se pudo cargar el detector";
-			return;
-		}
-
 		this.status = "escaneando";
 		this.#running = true;
+		this.#scanStartedAt = performance.now();
 		void this.#keepScreenAwake();
 
 		if (this.capture === "foto") {
@@ -187,7 +217,7 @@ export class Scanner {
 	 * regresión en la geometría se ve en el escritorio.
 	 */
 	async startWithImage(file: Blob, formatId: FormatId): Promise<void> {
-		this.stop();
+		this.#stopScanning();
 		this.formatId = formatId;
 		this.reset();
 		this.status = "cargando";
@@ -204,7 +234,7 @@ export class Scanner {
 		this.message = "cargando el detector";
 
 		try {
-			await this.#startWorker();
+			await this.#ensureWorker();
 		} catch (error) {
 			this.status = "error";
 			this.message = error instanceof Error ? error.message : "no se pudo cargar el detector";
@@ -218,7 +248,8 @@ export class Scanner {
 		this.#sendImageFrame();
 	}
 
-	stop(): void {
+	/** Detiene el escaneo y libera la cámara, pero conserva el worker ya cargado. */
+	#stopScanning(): void {
 		this.#running = false;
 		void this.#wakeLock?.release();
 		this.#wakeLock = null;
@@ -250,8 +281,6 @@ export class Scanner {
 			this.#video.srcObject = null;
 		}
 
-		this.#worker?.terminate();
-		this.#worker = null;
 		this.busy = false;
 		this.torch = { available: false, on: false };
 
@@ -260,12 +289,22 @@ export class Scanner {
 		}
 	}
 
+	/** Cierra todo, worker incluido. Se usa al salir de la vista de escaneo. */
+	stop(): void {
+		this.#stopScanning();
+		this.#worker?.terminate();
+		this.#worker = null;
+		this.#workerReady = null;
+	}
+
 	reset(): void {
 		this.#history = [];
 		this.answers = new Array(this.format.questions).fill("");
 		this.votes = new Array(this.format.questions).fill(0);
 		this.fills = [];
 		this.progress = 0;
+		this.framesTried = 0;
+		this.msToFirstRead = 0;
 		this.quad = null;
 		this.marks = [];
 		this.qrQuad = null;
@@ -461,8 +500,13 @@ export class Scanner {
 						return;
 					}
 
+					// Un fallo del detector se muestra: antes sólo se guardaba el mensaje y en
+					// modo imagen, que no dibuja la barra de estado, el escaneo se quedaba
+					// callado para siempre.
+					this.status = "error";
 					this.message = response.message;
 					this.busy = false;
+					this.#running = false;
 					return;
 				}
 
@@ -514,6 +558,12 @@ export class Scanner {
 
 	#onResult(result: FrameResult, debugImage: ImageBitmap | null): void {
 		this.busy = false;
+		this.framesTried++;
+
+		if (result.ok && this.msToFirstRead === 0 && this.#scanStartedAt > 0) {
+			this.msToFirstRead = Math.round(performance.now() - this.#scanStartedAt);
+		}
+
 		this.quad = result.quad;
 		this.marks = result.marks;
 		this.qrQuad = result.qrQuad;
@@ -576,6 +626,15 @@ export class Scanner {
 			return;
 		}
 
+		// Atajo con asistencia: teléfono quieto y dos lecturas idénticas. Ahorra el
+		// tercer voto, que es medio segundo de espera con la hoja ya leída.
+		if (this.assist && result.motion <= STILL_THRESHOLD && lastTwoAgree(this.#history)) {
+			this.answers = this.#history[this.#history.length - 1];
+			this.progress = 1;
+			this.#finish();
+			return;
+		}
+
 		if (this.#imageSource != null) {
 			this.#sendImageFrame();
 			this.message = "leyendo la imagen de prueba";
@@ -596,13 +655,13 @@ export class Scanner {
 		// Con una imagen fija no hay nada que asistir: el encuadre ya está decidido, y
 		// seguir la hoja o pedir "acércate" sólo estorbaría.
 		if (this.#imageSource != null) {
-			this.guidance = { message: "", nudge: null, framed: result.ok };
+			this.guidance = { message: "", framed: result.ok };
 			this.#roi = null;
 			return;
 		}
 
 		if (!this.assist) {
-			this.guidance = { message: "", nudge: null, framed: result.ok };
+			this.guidance = { message: "", framed: result.ok };
 			this.#roi = null;
 			return;
 		}
@@ -618,6 +677,12 @@ export class Scanner {
 		// después de dos frames sin encontrarla para no quedar pegado a una zona vacía.
 		if (result.quad != null) {
 			this.#roi = roiFor(result.quad, frame);
+			this.#misses = 0;
+		} else if (result.hintRoi != null) {
+			// No se ubicó la hoja pero sí el QR, que se ve de más lejos: la próxima
+			// búsqueda se acota a donde el QR dice que está el bloque, y ahí las marcas
+			// aparecen mucho más grandes en la imagen analizada.
+			this.#roi = result.hintRoi;
 			this.#misses = 0;
 		} else {
 			this.#misses++;

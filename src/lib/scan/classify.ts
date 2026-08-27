@@ -152,6 +152,25 @@ export function voteAnswers(history: string[][], questions: number, minVotes: nu
 	};
 }
 
+/**
+ * ¿Coinciden exactamente las dos últimas lecturas?
+ *
+ * Con el teléfono quieto, dos lecturas idénticas son evidencia suficiente: el
+ * tercer voto sólo agrega medio segundo de espera. El consenso de tres se mantiene
+ * como camino normal, porque con la mano en movimiento dos frames seguidos pueden
+ * compartir el mismo error.
+ */
+export function lastTwoAgree(history: string[][]): boolean {
+	if (history.length < 2) {
+		return false;
+	}
+
+	const ultima = history[history.length - 1];
+	const anterior = history[history.length - 2];
+
+	return ultima.length === anterior.length && ultima.every((valor, indice) => valor === anterior[indice]);
+}
+
 /** Respuestas en el formato compacto que se copia o exporta: `01=A,02=,03=BC`. */
 export function answersToText(answers: string[]): string {
 	return answers.map((answer, index) => `${(index + 1).toString().padStart(2, "0")}=${answer}`).join(",");

@@ -75,17 +75,15 @@ describe("guidance", () => {
 		expect(guia.framed).toBe(false);
 	});
 
-	it("empuja hacia las marcas cuando la hoja se salió", () => {
+	it("pide centrar cuando sólo ve marcas en una esquina", () => {
 		const guia = guidance({ quad: null, marks: [{ x: 900, y: 1200 }], frame, aspect });
 		expect(guia.message).toBe("centra la hoja en el cuadro");
-		expect(guia.nudge?.x).toBeGreaterThan(0);
-		expect(guia.nudge?.y).toBeGreaterThan(0);
+		expect(guia.framed).toBe(false);
 	});
 
 	it("informa marcas parciales cuando ya están centradas", () => {
 		const guia = guidance({ quad: null, marks: [{ x: 500, y: 700 }], frame, aspect });
 		expect(guia.message).toContain("faltan marcas");
-		expect(guia.nudge).toBeNull();
 	});
 
 	it("pide acercarse cuando la hoja se ve chica", () => {
@@ -93,12 +91,10 @@ describe("guidance", () => {
 		expect(guia.message).toBe("acércate a la hoja");
 	});
 
-	it("avisa cuando el bloque se sale del cuadro y empuja al revés", () => {
-		// Se sale por la derecha: hay que mover el teléfono hacia la derecha, o sea
-		// empujar la imagen a la izquierda.
+	it("avisa cuando el bloque se sale del cuadro", () => {
 		const guia = guidance({ quad: quadOf(400, 480, 780, 546), marks: [], frame, aspect });
 		expect(guia.message).toBe("la hoja se sale del cuadro");
-		expect(guia.nudge?.x).toBeGreaterThan(0);
+		expect(guia.framed).toBe(false);
 	});
 
 	it("no exige centrar el bloque, que siempre queda bajo el centro de la hoja", () => {

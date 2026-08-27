@@ -136,8 +136,6 @@ export function nextZoom(current: number, ratio: number, range: ZoomRange): numb
 export type Guidance = {
 	/** Qué hacer, en imperativo y corto: se lee de un vistazo mientras se mueve el teléfono. */
 	message: string;
-	/** Hacia dónde mover el teléfono, en fracción del frame. null si no hay que moverse. */
-	nudge: Point | null;
 	/** true cuando el encuadre ya sirve y sólo falta sostener. */
 	framed: boolean;
 };
@@ -162,14 +160,14 @@ export function guidance(input: GuidanceInput): Guidance {
 	const { quad, marks, frame } = input;
 
 	if (frame.width <= 0) {
-		return { message: "apunta a la hoja", nudge: null, framed: false };
+		return { message: "apunta a la hoja", framed: false };
 	}
 
 	const centroFrame = rectCenter({ x: 0, y: 0, width: frame.width, height: frame.height });
 
 	if (quad == null) {
 		if (marks.length === 0) {
-			return { message: "apunta a la hoja completa", nudge: null, framed: false };
+			return { message: "apunta a la hoja completa", framed: false };
 		}
 
 		// Se ven marcas pero no cierran un bloque: lo más útil es decir hacia dónde
@@ -179,16 +177,15 @@ export function guidance(input: GuidanceInput): Guidance {
 			y: marks.reduce((total, mark) => total + mark.y, 0) / marks.length,
 		};
 
-		const nudge = {
+		const desvio = {
 			x: (centroide.x - centroFrame.x) / frame.width,
 			y: (centroide.y - centroFrame.y) / frame.height,
 		};
 
-		const lejos = Math.hypot(nudge.x, nudge.y) > 0.08;
+		const lejos = Math.hypot(desvio.x, desvio.y) > 0.08;
 
 		return {
 			message: lejos ? "centra la hoja en el cuadro" : `faltan marcas (${marks.length} a la vista)`,
-			nudge: lejos ? nudge : null,
 			framed: false,
 		};
 	}
@@ -203,17 +200,13 @@ export function guidance(input: GuidanceInput): Guidance {
 	};
 
 	if (Math.abs(fuera.x) > margen || Math.abs(fuera.y) > margen) {
-		return {
-			message: "la hoja se sale del cuadro",
-			nudge: { x: -fuera.x / frame.width, y: -fuera.y / frame.height },
-			framed: false,
-		};
+		return { message: "la hoja se sale del cuadro", framed: false };
 	}
 
 	const ratio = areaRatio(bounds, targetRect(frame, input.aspect));
 
 	if (ratio < 0.45) {
-		return { message: "acércate a la hoja", nudge: null, framed: false };
+		return { message: "acércate a la hoja", framed: false };
 	}
 
 	const arriba = distance(quad.topLeft, quad.topRight);
@@ -226,10 +219,10 @@ export function guidance(input: GuidanceInput): Guidance {
 	);
 
 	if (sesgo > 0.18) {
-		return { message: "mira la hoja de frente", nudge: null, framed: false };
+		return { message: "mira la hoja de frente", framed: false };
 	}
 
-	return { message: "sostén la hoja quieta", nudge: null, framed: true };
+	return { message: "sostén la hoja quieta", framed: true };
 }
 
 /** Umbral de movimiento bajo el cual se considera que el teléfono está quieto. */

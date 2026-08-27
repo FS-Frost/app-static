@@ -8,7 +8,7 @@
  */
 
 /** Dónde se ancla la detección. */
-export type Anchor = "marcas-estricto" | "marcas-tolerante" | "qr";
+export type Anchor = "auto" | "marcas-estricto" | "marcas-tolerante" | "qr";
 
 /** Cómo se obtienen los frames. */
 export type Capture = "continua" | "foto";
@@ -20,6 +20,12 @@ export type AnchorInfo = {
 };
 
 export const ANCHORS: AnchorInfo[] = [
+	{
+		id: "auto",
+		label: "Automático",
+		detail:
+			"Prueba todas las vías en cada frame: marcas, QR y umbrales alternativos, hasta que una cierra. Es la que detecta más rápido.",
+	},
 	{
 		id: "marcas-tolerante",
 		label: "Marcas, tolerante",
@@ -56,11 +62,11 @@ export const CAPTURES: CaptureInfo[] = [
 	},
 ];
 
-export const defaultAnchor: Anchor = "marcas-tolerante";
+export const defaultAnchor: Anchor = "auto";
 export const defaultCapture: Capture = "continua";
 
 export function isAnchor(value: string): value is Anchor {
-	return value === "marcas-estricto" || value === "marcas-tolerante" || value === "qr";
+	return value === "auto" || value === "marcas-estricto" || value === "marcas-tolerante" || value === "qr";
 }
 
 export function isCapture(value: string): value is Capture {

@@ -263,7 +263,15 @@ export function checkQuad(
  * Lo que distingue al bloque es su proporción, que viene impresa: se prueban todos
  * los pares de filas y gana el que la cumple, prefiriendo las filas con más marcas.
  */
-export function findAnswersQuad(marks: Box[], options: AnswersQuadOptions): Quad | null {
+export type AnswersQuad = {
+	quad: Quad;
+	/** Cuántas marcas reales respaldan el cuadrilátero: más es más confiable. */
+	support: number;
+	/** true si alguna esquina se dedujo en vez de verse. */
+	deduced: boolean;
+};
+
+export function findAnswersQuad(marks: Box[], options: AnswersQuadOptions): AnswersQuad | null {
 	if (marks.length < 3) {
 		return null;
 	}
@@ -279,12 +287,7 @@ export function findAnswersQuad(marks: Box[], options: AnswersQuadOptions): Quad
 		return null;
 	}
 
-	type Candidate = {
-		quad: Quad;
-		score: number;
-	};
-
-	const candidates: Candidate[] = [];
+	const candidates: AnswersQuad[] = [];
 
 	for (let top = 0; top < rows.length; top++) {
 		for (let bottom = top + 1; bottom < rows.length; bottom++) {
@@ -300,7 +303,8 @@ export function findAnswersQuad(marks: Box[], options: AnswersQuadOptions): Quad
 			candidates.push({
 				quad,
 				// Se prefiere lo que se vio de verdad: más marcas y sin esquinas deducidas.
-				score: rows[top].count + rows[bottom].count,
+				support: rows[top].count + rows[bottom].count,
+				deduced: rows[top].count < 2 || rows[bottom].count < 2 || anchosDispares(rows[top], rows[bottom]),
 			});
 		}
 	}
@@ -309,8 +313,8 @@ export function findAnswersQuad(marks: Box[], options: AnswersQuadOptions): Quad
 		return null;
 	}
 
-	candidates.sort((a, b) => b.score - a.score);
-	return candidates[0].quad;
+	candidates.sort((a, b) => b.support - a.support);
+	return candidates[0];
 }
 
 /**
@@ -321,6 +325,12 @@ export function findAnswersQuad(marks: Box[], options: AnswersQuadOptions): Quad
  * aproximación —ignora la perspectiva en esa esquina—, pero el error queda muy por
  * debajo del tamaño de una burbuja y la grilla se reconstruye igual desde la hoja.
  */
+/** true si las dos filas no miden lo mismo de ancho, o sea que falta una marca de punta. */
+function anchosDispares(upper: MarkRow, lower: MarkRow): boolean {
+	const ratio = Math.min(upper.width, lower.width) / Math.max(upper.width, lower.width);
+	return ratio < 0.85;
+}
+
 export function quadFromRows(upper: MarkRow, lower: MarkRow, completeCorners: boolean): Quad | null {
 	if (upper.count >= 2 && lower.count >= 2) {
 		const widthRatio = Math.min(upper.width, lower.width) / Math.max(upper.width, lower.width);
