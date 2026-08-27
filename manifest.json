@@ -1,0 +1,25 @@
+{
+	"name": "Escáner de respuestas",
+	"short_name": "Escáner",
+	"description": "Lee hojas de respuestas de 45 u 80 preguntas con la cámara, sin servidor.",
+	"start_url": ".",
+	"scope": ".",
+	"display": "standalone",
+	"orientation": "portrait",
+	"theme_color": "#0f172a",
+	"background_color": "#0f172a",
+	"icons": [
+		{
+			"src": "logo192.png",
+			"sizes": "192x192",
+			"type": "image/png",
+			"purpose": "any maskable"
+		},
+		{
+			"src": "logo512.png",
+			"sizes": "512x512",
+			"type": "image/png",
+			"purpose": "any maskable"
+		}
+	]
+}
