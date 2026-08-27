@@ -45,12 +45,20 @@ bun run build
 - **Peor error posible: una pregunta marcada que se reporta en blanco.** Antes que
   adivinar, se reporta doble marca (`BD`) o se descarta el frame con un motivo en
   español que el usuario pueda accionar ("mira la hoja de frente").
+- **Las anclas son para comparar en terreno, no para elegir por nosotros.** Si
+  agregas una, va a `strategy.ts` con su descripción y con un test e2e contra la
+  hoja que la justifica.
+- **La plantilla del QR se mide, no se estima.** El modo depuración imprime las
+  esquinas del bloque en el marco del símbolo; esos son los números de `qrTemplates`.
+  El contenido del QR nunca se escribe en una salida.
 
 ## Dónde tocar qué
 
 | Necesidad | Archivo |
 | --- | --- |
 | Nuevo formato de hoja | `src/lib/scan/format.ts` |
+| Anclas, tolerancias y modos de captura | `src/lib/scan/strategy.ts` |
+| Plantilla del QR y afinado con marcas | `src/lib/scan/qr.ts` |
 | Ubicación de la hoja / validación del encuadre | `src/lib/scan/geometry.ts` |
 | Reconstrucción de la grilla | `src/lib/scan/grid.ts` |
 | Umbrales de marcado y consenso entre frames | `src/lib/scan/classify.ts` |

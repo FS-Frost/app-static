@@ -4,8 +4,10 @@
 	import DebugPanel from "$lib/gui/DebugPanel.svelte";
 	import FormatPicker from "$lib/gui/FormatPicker.svelte";
 	import { answersToCsv, answersToText } from "$lib/scan/classify";
+	import { ANCHORS, type Anchor } from "$lib/scan/strategy";
 	import { isFormatId, type FormatId } from "$lib/scan/format";
-	import { MIN_VOTES, Scanner } from "$lib/scan/scanner.svelte";
+	import { Scanner } from "$lib/scan/scanner.svelte";
+	import { isAnchor, isCapture } from "$lib/scan/strategy";
 
 	type Vista = "formato" | "camara" | "imagen";
 
@@ -18,17 +20,29 @@
 	let copiado = $state<boolean>(false);
 	let imagen = $state<File | null>(null);
 
-	// El formato elegido sobrevive a un cierre de la app: en un colegio se corrigen
-	// muchas hojas del mismo formato seguidas.
+	// Formato y preferencias sobreviven a un cierre de la app: en un colegio se
+	// corrigen muchas hojas seguidas y nadie quiere volver a elegir todo.
 	$effect(() => {
-		const guardado = localStorage.getItem("formato");
-		if (guardado != null && isFormatId(guardado)) {
-			formatId = guardado;
+		const formatoGuardado = localStorage.getItem("formato");
+		if (formatoGuardado != null && isFormatId(formatoGuardado)) {
+			formatId = formatoGuardado;
+		}
+
+		const anclaGuardada = localStorage.getItem("ancla");
+		if (anclaGuardada != null && isAnchor(anclaGuardada)) {
+			scanner.anchor = anclaGuardada;
+		}
+
+		const capturaGuardada = localStorage.getItem("captura");
+		if (capturaGuardada != null && isCapture(capturaGuardada)) {
+			scanner.capture = capturaGuardada;
 		}
 	});
 
 	$effect(() => {
 		localStorage.setItem("formato", formatId);
+		localStorage.setItem("ancla", scanner.anchor);
+		localStorage.setItem("captura", scanner.capture);
 	});
 
 	$effect(() => {
@@ -47,6 +61,10 @@
 			void scanner.start(camara.getVideo(), formatId);
 		}
 	});
+
+	function getAnchor(id: Anchor) {
+		return ANCHORS.find((opcion) => opcion.id === id) ?? ANCHORS[0];
+	}
 
 	function volver(): void {
 		scanner.stop();
@@ -79,6 +97,8 @@
 {#if vista === "formato"}
 	<FormatPicker
 		bind:formatId
+		bind:anchor={scanner.anchor}
+		bind:capture={scanner.capture}
 		bind:debug={scanner.debug}
 		onstart={() => (vista = "camara")}
 		ontest={(archivo) => {
@@ -91,7 +111,7 @@
 		<header>
 			<button type="button" class="secundario" onclick={volver}>← Formato</button>
 			<span class="titulo">
-				{scanner.format.questions} preguntas{vista === "imagen" ? " · imagen" : ""}
+				{scanner.format.questions} preguntas · {vista === "imagen" ? "imagen" : getAnchor(scanner.anchor).label}
 			</span>
 			<label class="toggle">
 				<input type="checkbox" bind:checked={scanner.debug} />
@@ -104,6 +124,14 @@
 		{/if}
 
 		<div class="acciones">
+			<!-- El botón sólo aparece con la cámara ya abierta: apretarlo mientras carga
+			     no hacía nada y parecía que la app se colgaba. -->
+			{#if vista === "camara" && scanner.capture === "foto" && scanner.status === "escaneando"}
+				<button type="button" class="primario" disabled={scanner.busy} onclick={() => scanner.shoot()}>
+					{scanner.busy ? "Leyendo…" : "Tomar foto"}
+				</button>
+			{/if}
+
 			{#if scanner.torch.available}
 				<button type="button" class="secundario" onclick={() => scanner.toggleTorch()}>
 					{scanner.torch.on ? "Apagar flash" : "Encender flash"}
@@ -125,7 +153,7 @@
 			format={scanner.format}
 			answers={scanner.answers}
 			votes={scanner.votes}
-			minVotes={MIN_VOTES}
+			minVotes={scanner.minVotes}
 		/>
 
 		{#if scanner.debug}

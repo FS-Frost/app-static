@@ -34,3 +34,25 @@ test("lee la hoja desde la cámara en un teléfono", async ({ page }) => {
 	expect(caja).not.toBeNull();
 	expect((caja?.height ?? 0) / (caja?.width ?? 1)).toBeCloseTo(video.height / video.width, 1);
 });
+
+test("modo foto: dispara y lee", async ({ page }) => {
+	await page.goto("/");
+	await page.getByRole("button", { name: /^45 preguntas/ }).click();
+	await page.getByRole("button", { name: /^Una foto/ }).click();
+	await page.getByRole("button", { name: "Abrir cámara" }).click();
+
+	const disparar = page.getByRole("button", { name: /Tomar foto|Leyendo/ });
+	await expect(disparar).toBeVisible({ timeout: 30_000 });
+	await disparar.click();
+
+	await expect(page.getByRole("button", { name: "Escanear otra" })).toBeVisible({ timeout: 40_000 });
+
+	const respuestas = await page.$$eval("li .respuesta", (celdas) =>
+		celdas.map((celda) => {
+			const texto = celda.textContent?.trim() ?? "";
+			return texto === "—" ? "" : texto;
+		})
+	);
+
+	expect(respuestas).toEqual(RESPUESTAS_45);
+});

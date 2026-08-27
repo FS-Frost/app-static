@@ -1,3 +1,5 @@
+import { strictTolerance, type Tolerance } from "./strategy";
+
 export type Point = {
 	x: number;
 	y: number;
@@ -143,15 +145,19 @@ export type MarkRow = {
 	count: number;
 };
 
-/** Agrupa las marcas por altura y devuelve las filas con al menos dos marcas. */
-export function markRows(marks: Box[], rowTolerance: number): MarkRow[] {
+/**
+ * Agrupa las marcas por altura. `minMarks` es cuántas marcas necesita una fila
+ * para contar: con dos se conocen sus dos esquinas, con una hay que deducir la
+ * otra (ver `findAnswersQuad`).
+ */
+export function markRows(marks: Box[], rowTolerance: number, minMarks: number = 2): MarkRow[] {
 	const centers = marks.map(boxCenter);
 
 	return cluster1d(
 		centers.map((point) => point.y),
 		rowTolerance
 	)
-		.filter((cluster) => cluster.indexes.length >= 2)
+		.filter((cluster) => cluster.indexes.length >= minMarks)
 		.map((cluster) => {
 			const points = cluster.indexes.map((index) => centers[index]);
 			const left = points.reduce((best, point) => (point.x < best.x ? point : best), points[0]);
@@ -200,7 +206,8 @@ export function checkQuad(
 	quad: Quad,
 	frameWidth: number,
 	frameHeight: number,
-	aspectRange: AspectRange = answersBlockAspect
+	aspectRange: AspectRange = answersBlockAspect,
+	tolerance: Tolerance = strictTolerance
 ): QuadCheck {
 	const top = distance(quad.topLeft, quad.topRight);
 	const bottom = distance(quad.bottomLeft, quad.bottomRight);
@@ -218,19 +225,19 @@ export function checkQuad(
 		coverage,
 	};
 
-	if (horizontal < frameWidth * 0.2 || vertical < frameHeight * 0.15) {
+	if (horizontal < frameWidth * tolerance.minSide || vertical < frameHeight * tolerance.minSide) {
 		result.reason = "hoja muy chica en el cuadro";
 		return result;
 	}
 
-	if (coverage < 0.08) {
+	if (coverage < tolerance.minCoverage) {
 		result.reason = "acerca la cámara";
 		return result;
 	}
 
 	const horizontalSkew = Math.abs(top - bottom) / Math.max(top, bottom);
 	const verticalSkew = Math.abs(left - right) / Math.max(left, right);
-	if (horizontalSkew > 0.25 || verticalSkew > 0.25) {
+	if (horizontalSkew > tolerance.maxSkew || verticalSkew > tolerance.maxSkew) {
 		result.reason = "mira la hoja de frente";
 		return result;
 	}
@@ -250,19 +257,24 @@ export function checkQuad(
  * No sirve tomar los extremos de todas las marcas: la hoja trae también marcas
  * junto a la cabecera, y con una de ellas de menos —o tapada por un pulgar— el
  * "cuadrilátero" sale trapecio y la hoja rectificada queda torcida. Tampoco sirve
- * quedarse con las dos filas más anchas: en la hoja de 45 la fila de la cabecera
- * es un poco más ancha que las del bloque.
+ * quedarse con las dos filas más anchas: en la hoja de 45 la fila de la cabecera es
+ * un poco más ancha que las del bloque.
  *
- * Lo que sí distingue al bloque es su proporción, que viene impresa: se prueban
- * todos los pares de filas y gana el primero que la cumple, prefiriendo las filas
- * con más marcas.
+ * Lo que distingue al bloque es su proporción, que viene impresa: se prueban todos
+ * los pares de filas y gana el que la cumple, prefiriendo las filas con más marcas.
  */
 export function findAnswersQuad(marks: Box[], options: AnswersQuadOptions): Quad | null {
-	if (marks.length < 4) {
+	if (marks.length < 3) {
 		return null;
 	}
 
-	const rows = markRows(marks, options.rowTolerance);
+	const tolerance = options.tolerance ?? strictTolerance;
+	const aspectRange = options.aspectRange ?? answersBlockAspect;
+
+	// Con completado activado se aceptan filas de una sola marca: la esquina que
+	// falta se deduce, que es lo que permite leer con una esquina de la hoja fuera
+	// del cuadro.
+	const rows = markRows(marks, options.rowTolerance, tolerance.completeCorners ? 1 : 2);
 	if (rows.length < 2) {
 		return null;
 	}
@@ -276,32 +288,19 @@ export function findAnswersQuad(marks: Box[], options: AnswersQuadOptions): Quad
 
 	for (let top = 0; top < rows.length; top++) {
 		for (let bottom = top + 1; bottom < rows.length; bottom++) {
-			const upper = rows[top];
-			const lower = rows[bottom];
-			if (upper.width <= 0 || lower.width <= 0) {
+			const quad = quadFromRows(rows[top], rows[bottom], tolerance.completeCorners);
+			if (quad == null) {
 				continue;
 			}
 
-			// Las dos filas encierran el mismo bloque, así que miden lo mismo de ancho.
-			const widthRatio = Math.min(upper.width, lower.width) / Math.max(upper.width, lower.width);
-			if (widthRatio < 0.85) {
-				continue;
-			}
-
-			const quad: Quad = {
-				topLeft: upper.left,
-				topRight: upper.right,
-				bottomRight: lower.right,
-				bottomLeft: lower.left,
-			};
-
-			if (!checkQuad(quad, options.frameWidth, options.frameHeight, options.aspectRange).valid) {
+			if (!checkQuad(quad, options.frameWidth, options.frameHeight, aspectRange, tolerance).valid) {
 				continue;
 			}
 
 			candidates.push({
 				quad,
-				score: upper.count + lower.count,
+				// Se prefiere lo que se vio de verdad: más marcas y sin esquinas deducidas.
+				score: rows[top].count + rows[bottom].count,
 			});
 		}
 	}
@@ -314,12 +313,119 @@ export function findAnswersQuad(marks: Box[], options: AnswersQuadOptions): Quad
 	return candidates[0].quad;
 }
 
+/**
+ * Arma el cuadrilátero con dos filas de marcas.
+ *
+ * Si una fila trae una sola marca, se decide de qué lado está comparándola con las
+ * dos esquinas de la otra fila, y la que falta se deduce como paralelogramo. Es una
+ * aproximación —ignora la perspectiva en esa esquina—, pero el error queda muy por
+ * debajo del tamaño de una burbuja y la grilla se reconstruye igual desde la hoja.
+ */
+export function quadFromRows(upper: MarkRow, lower: MarkRow, completeCorners: boolean): Quad | null {
+	if (upper.count >= 2 && lower.count >= 2) {
+		const widthRatio = Math.min(upper.width, lower.width) / Math.max(upper.width, lower.width);
+		if (widthRatio >= 0.85) {
+			return {
+				topLeft: upper.left,
+				topRight: upper.right,
+				bottomRight: lower.right,
+				bottomLeft: lower.left,
+			};
+		}
+
+		if (!completeCorners) {
+			return null;
+		}
+
+		// Las dos filas encierran el mismo bloque, así que miden lo mismo de ancho. Si
+		// una sale más corta, es que le falta una marca de punta —tapada por un dedo o
+		// mal impresa—, y se deduce cuál comparando sus puntas con las de la otra fila.
+		const narrowIsUpper = upper.width < lower.width;
+		const narrow = narrowIsUpper ? upper : lower;
+		const wide = narrowIsUpper ? lower : upper;
+		const leftMatches = Math.abs(narrow.left.x - wide.left.x) <= Math.abs(narrow.right.x - wide.right.x);
+		const span = { x: wide.right.x - wide.left.x, y: wide.right.y - wide.left.y };
+		const fixed: MarkRow = leftMatches
+			? {
+					...narrow,
+					right: { x: narrow.left.x + span.x, y: narrow.left.y + span.y },
+				}
+			: {
+					...narrow,
+					left: { x: narrow.right.x - span.x, y: narrow.right.y - span.y },
+				};
+
+		return narrowIsUpper
+			? {
+					topLeft: fixed.left,
+					topRight: fixed.right,
+					bottomRight: wide.right,
+					bottomLeft: wide.left,
+				}
+			: {
+					topLeft: wide.left,
+					topRight: wide.right,
+					bottomRight: fixed.right,
+					bottomLeft: fixed.left,
+				};
+	}
+
+	if (!completeCorners) {
+		return null;
+	}
+
+	// Sólo se completa una esquina: con dos deducidas el cuadrilátero sería un
+	// invento.
+	if (upper.count < 2 && lower.count < 2) {
+		return null;
+	}
+
+	if (lower.count >= 2) {
+		const marca = upper.left;
+		const esIzquierda = Math.abs(marca.x - lower.left.x) <= Math.abs(marca.x - lower.right.x);
+		if (esIzquierda) {
+			return {
+				topLeft: marca,
+				topRight: { x: marca.x + (lower.right.x - lower.left.x), y: marca.y + (lower.right.y - lower.left.y) },
+				bottomRight: lower.right,
+				bottomLeft: lower.left,
+			};
+		}
+
+		return {
+			topLeft: { x: marca.x - (lower.right.x - lower.left.x), y: marca.y - (lower.right.y - lower.left.y) },
+			topRight: marca,
+			bottomRight: lower.right,
+			bottomLeft: lower.left,
+		};
+	}
+
+	const marca = lower.left;
+	const esIzquierda = Math.abs(marca.x - upper.left.x) <= Math.abs(marca.x - upper.right.x);
+	if (esIzquierda) {
+		return {
+			topLeft: upper.left,
+			topRight: upper.right,
+			bottomRight: { x: marca.x + (upper.right.x - upper.left.x), y: marca.y + (upper.right.y - upper.left.y) },
+			bottomLeft: marca,
+		};
+	}
+
+	return {
+		topLeft: upper.left,
+		topRight: upper.right,
+		bottomRight: marca,
+		bottomLeft: { x: marca.x - (upper.right.x - upper.left.x), y: marca.y - (upper.right.y - upper.left.y) },
+	};
+}
+
 export type AnswersQuadOptions = {
 	/** Distancia máxima en y para que dos marcas cuenten como la misma fila. */
 	rowTolerance: number;
 	frameWidth: number;
 	frameHeight: number;
 	aspectRange?: AspectRange;
+	tolerance?: Tolerance;
 };
 
 export type Cluster = {

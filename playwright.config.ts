@@ -35,7 +35,7 @@ export default defineConfig({
 	projects: [
 		{
 			name: "chromium",
-			testIgnore: /camara\.spec\.ts/,
+			testIgnore: /camara.*\.spec\.ts/,
 			use: {
 				...devices["Desktop Chrome"],
 				launchOptions,
@@ -46,7 +46,7 @@ export default defineConfig({
 			// video de una hoja, así que el camino de captura se prueba de verdad y no
 			// sólo el de "elegir una imagen".
 			name: "movil",
-			testMatch: /camara\.spec\.ts/,
+			testMatch: /camara.*\.spec\.ts/,
 			use: {
 				...devices["Pixel 5"],
 				permissions: ["camera"],

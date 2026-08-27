@@ -240,6 +240,10 @@ export function buildGrid(boxes: Box[], format: SheetFormat, page: BubbleFilter)
 		medianHeight * 0.6
 	).filter((cluster) => cluster.values.length >= Math.ceil(expectedPerRow * 0.75));
 
+	result.debug = `filas detectadas ${rowClusters.length} [${rowClusters
+		.map((cluster) => `${cluster.center.toFixed(0)}x${cluster.values.length}`)
+		.join(" ")}]`;
+
 	if (rowClusters.length === 0) {
 		result.reason = "no se distinguen filas";
 		return result;
@@ -289,10 +293,6 @@ export function buildGrid(boxes: Box[], format: SheetFormat, page: BubbleFilter)
 		result.reason = "no cuadran las columnas";
 		return result;
 	}
-
-	result.debug = `filas detectadas ${rowClusters.length} [${rowClusters
-		.map((cluster) => `${cluster.center.toFixed(0)}x${cluster.values.length}`)
-		.join(" ")}]`;
 
 	result.grid = {
 		rowCenters: rowFit.positions,

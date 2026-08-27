@@ -1,14 +1,24 @@
 <script lang="ts">
 	import { FORMATS, type FormatId } from "$lib/scan/format";
+	import { ANCHORS, CAPTURES, type Anchor, type Capture } from "$lib/scan/strategy";
 
 	interface Props {
 		formatId: FormatId;
+		anchor: Anchor;
+		capture: Capture;
 		debug: boolean;
 		onstart: () => void;
 		ontest: (file: File) => void;
 	}
 
-	let { formatId = $bindable(), debug = $bindable(), onstart, ontest }: Props = $props();
+	let {
+		formatId = $bindable(),
+		anchor = $bindable(),
+		capture = $bindable(),
+		debug = $bindable(),
+		onstart,
+		ontest,
+	}: Props = $props();
 
 	let selector: HTMLInputElement;
 
@@ -23,22 +33,61 @@
 <section class="picker">
 	<header>
 		<h1>Escáner de respuestas</h1>
-		<p>Elige el formato de la prueba antes de escanear. El formato define cuántas filas y alternativas se buscan en la hoja.</p>
+		<p>El formato define cuántas filas y alternativas se buscan en la hoja.</p>
 	</header>
 
-	<div class="opciones">
-		{#each FORMATS as formato (formato.id)}
-			<button
-				type="button"
-				class="opcion"
-				class:activa={formatId === formato.id}
-				aria-pressed={formatId === formato.id}
-				onclick={() => (formatId = formato.id)}
-			>
-				<strong>{formato.questions} preguntas</strong>
-				<span>{formato.blocks} columnas · {formato.rows} filas · {formato.letters.join(" ")}</span>
-			</button>
-		{/each}
+	<div class="grupo">
+		<h2>Formato</h2>
+		<div class="opciones">
+			{#each FORMATS as formato (formato.id)}
+				<button
+					type="button"
+					class="opcion"
+					class:activa={formatId === formato.id}
+					aria-pressed={formatId === formato.id}
+					onclick={() => (formatId = formato.id)}
+				>
+					<strong>{formato.questions} preguntas</strong>
+					<span>{formato.blocks} columnas · {formato.rows} filas · {formato.letters.join(" ")}</span>
+				</button>
+			{/each}
+		</div>
+	</div>
+
+	<div class="grupo">
+		<h2>Cómo ubicar la hoja</h2>
+		<div class="opciones">
+			{#each ANCHORS as opcion (opcion.id)}
+				<button
+					type="button"
+					class="opcion"
+					class:activa={anchor === opcion.id}
+					aria-pressed={anchor === opcion.id}
+					onclick={() => (anchor = opcion.id)}
+				>
+					<strong>{opcion.label}</strong>
+					<span>{opcion.detail}</span>
+				</button>
+			{/each}
+		</div>
+	</div>
+
+	<div class="grupo">
+		<h2>Cómo capturar</h2>
+		<div class="opciones">
+			{#each CAPTURES as opcion (opcion.id)}
+				<button
+					type="button"
+					class="opcion"
+					class:activa={capture === opcion.id}
+					aria-pressed={capture === opcion.id}
+					onclick={() => (capture = opcion.id)}
+				>
+					<strong>{opcion.label}</strong>
+					<span>{opcion.detail}</span>
+				</button>
+			{/each}
+		</div>
 	</div>
 
 	<div class="botones">
@@ -60,8 +109,8 @@
 	</label>
 
 	<p class="nota">
-		La hoja debe entrar completa en el cuadro, con sus cuatro marcas negras de las esquinas visibles. Todo el
-		procesamiento ocurre en el teléfono: no se sube ninguna imagen.
+		Todo el procesamiento ocurre en el teléfono: no se sube ninguna imagen. Las combinaciones de ancla y captura
+		están para probarlas y quedarse con la que resulte más cómoda.
 	</p>
 </section>
 
@@ -70,7 +119,7 @@
 		display: flex;
 		flex-direction: column;
 		gap: 1.25rem;
-		padding: 1.5rem 1.25rem;
+		padding: 1.25rem 1rem 2rem;
 		max-width: 40rem;
 		margin: 0 auto;
 	}
@@ -81,18 +130,31 @@
 		line-height: 1.45;
 	}
 
+	.grupo {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	h2 {
+		font-size: 0.8125rem;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		color: var(--texto-suave);
+	}
+
 	.opciones {
 		display: grid;
-		gap: 0.75rem;
+		gap: 0.5rem;
 	}
 
 	.opcion {
 		display: flex;
 		flex-direction: column;
-		gap: 0.25rem;
+		gap: 0.2rem;
 		align-items: flex-start;
 		text-align: left;
-		padding: 1rem;
+		padding: 0.75rem 0.9rem;
 		border-radius: var(--radio);
 		border: 2px solid var(--borde);
 		background: var(--fondo-panel);
@@ -105,7 +167,8 @@
 
 	.opcion span {
 		color: var(--texto-suave);
-		font-size: 0.875rem;
+		font-size: 0.8125rem;
+		line-height: 1.35;
 	}
 
 	.botones {

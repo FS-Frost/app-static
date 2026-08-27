@@ -35,11 +35,44 @@ Pages cumple por HTTPS; en desarrollo sirve `localhost`.
 Conviene instalarla como app (Chrome → menú → *Instalar aplicación* / *Agregar a
 pantalla de inicio*): abre a pantalla completa, en vertical, y arranca sin red.
 
-1. Elegir el formato (45 u 80 preguntas). Queda guardado en `localStorage`.
-2. **Abrir cámara** y encuadrar la hoja completa, o **Usar una imagen** para leer
-   una foto o un escaneo del carrete.
+1. Elegir el **formato** (45 u 80 preguntas), **cómo ubicar la hoja** y **cómo
+   capturar**. Las tres elecciones quedan guardadas en `localStorage`.
+2. **Abrir cámara**, o **Usar una imagen** para leer una foto o un escaneo del
+   carrete.
 3. Cuando la lectura se estabiliza, se puede copiar (`01=A,02=,03=BC`) o bajar un
    CSV.
+
+### Cómo ubicar la hoja
+
+Tres anclas, seleccionables porque encuadrar a pulso es incómodo y cuál conviene
+depende del teléfono, de la luz y de la costumbre:
+
+| Ancla | En qué se apoya | Cuándo conviene |
+| --- | --- | --- |
+| **Marcas, tolerante** (por defecto) | las marcas negras impresas, aguantando ángulo y distancia; deduce una esquina que falte | uso normal |
+| **Marcas, estricto** | las mismas marcas, exigiendo hoja completa y de frente | cuando importa más no equivocarse que ir rápido |
+| **QR de la cabecera** | el QR, y afina con las marcas que se vean | cuando la hoja no entra entera en el cuadro |
+
+El ancla QR merece una explicación: el QR es chico y está lejos del bloque de
+respuestas, así que estimar desde él amplifica el error —medido sobre una hoja
+real, la esquina inferior derecha cae ~90 px del sitio correcto, suficiente para
+que la grilla no cierre—. Por eso el QR **estima** y cada marca que aparezca cerca
+de una esquina estimada la **corrige**. Con eso lee incluso una hoja a la que le
+falta toda la fila inferior de marcas (hay un test que lo comprueba).
+
+### Cómo capturar
+
+- **Continua**: analiza el video y termina solo cuando la lectura se repite. Sin
+  botones.
+- **Una foto**: dispara con `ImageCapture.takePhoto()`, que da la resolución
+  completa del sensor —muy por encima de la del stream— y permite encuadrar de más
+  lejos. Un disparo basta: no hay consenso que hacer sobre una sola imagen. Si el
+  navegador no lo soporta, cae al frame de video a resolución completa.
+
+Mientras se encuadra, el overlay dibuja lo que la app está viendo: las marcas
+detectadas como puntos, el QR si aparece, el cuadrilátero de la hoja cuando cierra,
+y el contador de marcas. Es la diferencia entre "no detecta" y "ve tres marcas,
+falta la de abajo a la derecha".
 
 El interruptor **Depurar** muestra la hoja rectificada con la grilla dibujada
 encima, los tiempos por etapa y el relleno medido de cada burbuja. Es la primera
@@ -52,7 +85,9 @@ SvelteKit 2 + Svelte 5 (runes), TypeScript, `adapter-static`, sin servidor.
 ```
 src/lib/scan/
   format.ts             formatos 45 / 80 (bloques, filas, alternativas)
+  strategy.ts           anclas, modos de captura y tolerancias
   geometry.ts           puntos, cajas, clustering, cuadrilátero de las marcas
+  qr.ts                 QR: detección, plantilla por formato y afinado con marcas
   homography.ts         homografía 4->4 resuelta en JS
   warpConvention.ts     calibración de warpPerspective del build custom
   grid.ts               reconstrucción de la grilla de burbujas
@@ -66,10 +101,13 @@ static/js/opencv-custom-build.js   build recortado de OpenCV.js (2,5 MB)
 
 1. `ImageBitmap` del video → `ImageData` → Mat RGBA → gris.
 2. Copia reducida a 640 px de ancho y umbral adaptativo: se buscan las **marcas de
-   registro** (los cuadrados negros macizos que la hoja trae impresos).
-3. Con las dos filas de marcas que encierran el bloque de preguntas se arma una
-   homografía a un rectángulo de 900 px de ancho. Lo rectificado es **el bloque de
-   respuestas**, sin cabecera.
+   registro** (los cuadrados negros macizos que la hoja trae impresos). Con el ancla
+   QR se busca además el símbolo, en una copia de 1280 px: a 640 el error en sus
+   esquinas se multiplica demasiado.
+3. Con las dos filas de marcas que encierran el bloque de preguntas —o con la
+   estimación del QR afinada con las marcas visibles— se arma una homografía a un
+   rectángulo de 900 px de ancho. Lo rectificado es **el bloque de respuestas**, sin
+   cabecera.
 4. Contornos sobre el bloque rectificado para reconstruir la grilla real: filas,
    bloques y alternativas salen de la hoja, no de factores fijos.
 5. Relleno de cada burbuja como contraste contra el papel que la rodea, y
@@ -98,6 +136,12 @@ static/js/opencv-custom-build.js   build recortado de OpenCV.js (2,5 MB)
   las marcas de lápiz claro (aparecen como pregunta en blanco, el peor error en una
   corrección) y con umbral fijo bajo el papel gris empieza a contar como marca.
 - **Doble marca se reporta como doble marca** (`BD`), no se resuelve a dedo.
+- **Los límites de encuadre son configurables, la validación de la lectura no.** El
+  modo tolerante acepta casi el doble de perspectiva porque la homografía la corrige
+  igual; lo que nunca se relaja es el chequeo de que las filas ajustadas caigan sobre
+  filas detectadas de verdad.
+- **El contenido del QR no se escribe en ninguna salida**, ni depurando: identifica
+  la prueba y al alumno.
 
 ### El build custom de OpenCV
 
@@ -134,11 +178,15 @@ deja ahí el módulo ya resuelto.
   corren contra `http://localhost:5055/app-static/`, o sea la forma real del sitio:
   que funcione servido desde un subdirectorio (sin 404 y con el service worker
   alcanzando la app) y que **escanee sin conexión** tras haber escaneado con red.
+- **End-to-end, anclas:** cada ancla contra la hoja que la justifica —el QR con la
+  hoja recortada sin la fila inferior de marcas, el modo tolerante con una marca
+  tapada, y el estricto rechazando esa misma hoja—.
 - **End-to-end, proyecto `movil`:** viewport de teléfono (Pixel 5) y **cámara falsa
   de Chrome** alimentada con un video de una hoja, generado con ffmpeg desde
-  `tests/fixtures/camara-45.png`. Es lo único que ejercita el camino de captura
-  —permisos, `getUserMedia`, bombeo de frames, proporción de la vista previa— y no
-  sólo el de "elegir una imagen". Sin ffmpeg, se salta.
+  `tests/fixtures/camara-45.png`. Cubre captura continua y modo foto. Es lo único que
+  ejercita el camino de cámara —permisos, `getUserMedia`, bombeo de frames,
+  proporción de la vista previa— y no sólo el de "elegir una imagen". Sin ffmpeg, se
+  salta.
 
 Las fixtures salen de `examples/` con la cabecera censurada: los originales traen
 nombre, colegio y RUT de alumnos reales, así que `examples/` está en `.gitignore` y
@@ -157,6 +205,12 @@ convert hoja-01.png -fill white -stroke none \
 
 Ojo con los rectángulos: si tapan las marcas de registro del bloque (y ≈ 555 en la
 hoja de 45), la hoja deja de ubicarse.
+
+El QR de las fixtures es **sintético** (`qrcode`, dependencia de desarrollo),
+pegado en la posición y el tamaño del original: el QR real identifica prueba y
+alumno y no puede quedar en el repositorio. La plantilla de `qr.ts` se midió con el
+propio escáner, comparando en un mismo frame las esquinas que reporta jsQR con las
+marcas detectadas — el modo depuración imprime esos números.
 
 ## PWA y despliegue
 
@@ -192,9 +246,16 @@ Primera visita: ~3 MB (app + detector). Después arranca y escanea sin red.
 
 ## Límites conocidos
 
-- Sólo respuestas: **no** se leen RUT, nivel, curso ni forma, ni el QR.
-- La hoja tiene que entrar completa en el cuadro, con sus marcas de registro
-  visibles; una hoja cortada por el encuadre se rechaza a propósito.
+- Sólo respuestas: **no** se leen RUT, nivel, curso ni forma. El QR se usa para
+  ubicar la hoja, pero su contenido no se reporta.
+- Con anclas de marcas, el bloque de respuestas tiene que entrar completo en el
+  cuadro; se rechaza a propósito si está cortado. Con ancla QR basta que se vean el
+  QR y alguna marca.
+- **Leer por columnas sueltas (acumular bloque a bloque) no está implementado**: sin
+  las marcas por bloque de la hoja de 80 —sólo tiene marcas en las cuatro esquinas
+  del bloque completo— no hay forma de saber qué columna se está mirando sin leer los
+  números impresos. El modo foto cubre la misma necesidad (acercarse para ganar
+  nitidez) sin esa ambigüedad.
 - Los PDF de ejemplo de 80 preguntas vienen sin respuestas marcadas, así que la
   fixture de 80 con marcas es sintética (círculos dibujados sobre la hoja real).
 - Probado en Chromium (escritorio y viewport de teléfono). En iPhone, Safari es otro

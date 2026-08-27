@@ -1,6 +1,7 @@
 import { voteAnswers, type VoteResult } from "./classify";
 import { getFormat, type FormatId, type SheetFormat } from "./format";
-import type { Quad } from "./geometry";
+import type { Point, Quad } from "./geometry";
+import { defaultAnchor, defaultCapture, type Anchor, type Capture } from "./strategy";
 import type { FrameResult, FrameTiming, ScanRequest, ScanResponse } from "./protocol";
 import ScanWorker from "./worker?worker";
 
@@ -11,6 +12,12 @@ export const HISTORY_SIZE = 6;
 
 /** Lecturas coincidentes que necesita una pregunta para darse por buena. */
 export const MIN_VOTES = 3;
+
+/**
+ * En modo foto no hay consenso posible: hay una sola imagen, a máxima resolución y
+ * ya enfocada. Repetirla tres veces daría exactamente el mismo resultado.
+ */
+export const MIN_VOTES_PHOTO = 1;
 
 /** Frames por segundo que se envían al worker. Más que esto no mejora el consenso. */
 const TARGET_ANALYSIS_FPS = 12;
@@ -30,6 +37,10 @@ function siteBaseUrl(): string {
 	return document.baseURI.replace(/[^/]*$/, "");
 }
 
+type ImageCaptureLike = {
+	takePhoto(): Promise<Blob>;
+};
+
 export type TorchState = {
 	available: boolean;
 	on: boolean;
@@ -41,25 +52,31 @@ export class Scanner {
 	/** Motivo o resumen del último frame procesado. Sólo interesa depurando. */
 	lastReason = $state<string>("");
 	formatId = $state<FormatId>("45");
+	anchor = $state<Anchor>(defaultAnchor);
+	capture = $state<Capture>(defaultCapture);
 	debug = $state<boolean>(false);
 	answers = $state<string[]>([]);
 	votes = $state<number[]>([]);
 	progress = $state<number>(0);
 	quad = $state<Quad | null>(null);
+	marks = $state<Point[]>([]);
+	qrQuad = $state<Quad | null>(null);
 	frameSize = $state<{ width: number; height: number }>({ width: 0, height: 0 });
 	timing = $state<FrameTiming>({ total: 0, locate: 0, warp: 0, read: 0 });
 	analysisFps = $state<number>(0);
 	fills = $state<number[][]>([]);
 	debugImage = $state<ImageBitmap | null>(null);
 	torch = $state<TorchState>({ available: false, on: false });
+	/** true mientras el worker procesa un frame. */
+	busy = $state<boolean>(false);
 
 	format = $derived<SheetFormat>(getFormat(this.formatId));
+	minVotes = $derived<number>(this.capture === "foto" ? MIN_VOTES_PHOTO : MIN_VOTES);
 
 	#worker: Worker | null = null;
 	#video: HTMLVideoElement | null = null;
 	#stream: MediaStream | null = null;
 	#history: string[][] = [];
-	#busy = false;
 	#frameId = 0;
 	#lastSentAt = 0;
 	#lastResultAt = 0;
@@ -96,9 +113,15 @@ export class Scanner {
 		}
 
 		this.status = "escaneando";
-		this.message = "apunta a la hoja completa";
 		this.#running = true;
 		void this.#keepScreenAwake();
+
+		if (this.capture === "foto") {
+			this.message = "encuadra y dispara";
+			return;
+		}
+
+		this.message = "apunta a la hoja completa";
 		this.#pump();
 	}
 
@@ -176,7 +199,7 @@ export class Scanner {
 
 		this.#worker?.terminate();
 		this.#worker = null;
-		this.#busy = false;
+		this.busy = false;
 		this.torch = { available: false, on: false };
 
 		if (this.status === "escaneando" || this.status === "cargando") {
@@ -191,6 +214,8 @@ export class Scanner {
 		this.fills = [];
 		this.progress = 0;
 		this.quad = null;
+		this.marks = [];
+		this.qrQuad = null;
 		this.debugImage?.close();
 		this.debugImage = null;
 	}
@@ -220,6 +245,60 @@ export class Scanner {
 
 		this.message = "apunta a la hoja completa";
 		this.#pump();
+	}
+
+	/**
+	 * Dispara una foto y la lee.
+	 *
+	 * `ImageCapture.takePhoto` da la resolución completa del sensor, muy por encima
+	 * de la del stream de video: la hoja puede ocupar bastante menos del cuadro y las
+	 * burbujas siguen nítidas, que es justo lo que cuesta al encuadrar a pulso. Si el
+	 * navegador no lo trae, se cae al frame de video a resolución completa.
+	 */
+	async shoot(): Promise<void> {
+		const track = this.#stream?.getVideoTracks()[0];
+		const video = this.#video;
+		if (track == null || video == null || this.busy || this.#worker == null) {
+			return;
+		}
+
+		this.busy = true;
+		this.message = "leyendo la foto";
+
+		try {
+			const bitmap = await this.#grabPhoto(track, video);
+			const request: ScanRequest = {
+				type: "frame",
+				frameId: ++this.#frameId,
+				formatId: this.formatId,
+				anchor: this.anchor,
+				debug: this.debug,
+				bitmap,
+			};
+
+			this.#worker.postMessage(request, [bitmap]);
+		} catch (error) {
+			this.busy = false;
+			this.message = error instanceof Error ? error.message : "no se pudo tomar la foto";
+		}
+	}
+
+	async #grabPhoto(track: MediaStreamTrack, video: HTMLVideoElement): Promise<ImageBitmap> {
+		const constructor = (globalThis as unknown as { ImageCapture?: new (track: MediaStreamTrack) => ImageCaptureLike })
+			.ImageCapture;
+
+		if (constructor != null) {
+			try {
+				const capture = new constructor(track);
+				const blob = await capture.takePhoto();
+				return await createImageBitmap(blob);
+			} catch {
+				// Varios teléfonos exponen ImageCapture y fallan al disparar; el frame de
+				// video sigue siendo mejor que nada.
+			}
+		}
+
+		return createImageBitmap(video);
 	}
 
 	async toggleTorch(): Promise<void> {
@@ -298,7 +377,7 @@ export class Scanner {
 					}
 
 					this.message = response.message;
-					this.#busy = false;
+					this.busy = false;
 					return;
 				}
 
@@ -330,13 +409,14 @@ export class Scanner {
 		}
 
 		this.#imageFramesLeft--;
-		this.#busy = true;
+		this.busy = true;
 
 		void createImageBitmap(source).then((bitmap) => {
 			const request: ScanRequest = {
 				type: "frame",
 				frameId: ++this.#frameId,
 				formatId: this.formatId,
+				anchor: this.anchor,
 				debug: this.debug,
 				bitmap,
 			};
@@ -346,8 +426,10 @@ export class Scanner {
 	}
 
 	#onResult(result: FrameResult, debugImage: ImageBitmap | null): void {
-		this.#busy = false;
+		this.busy = false;
 		this.quad = result.quad;
+		this.marks = result.marks;
+		this.qrQuad = result.qrQuad;
 		this.timing = result.timing;
 		this.frameSize = { width: result.frameWidth, height: result.frameHeight };
 
@@ -382,7 +464,7 @@ export class Scanner {
 			this.#history.shift();
 		}
 
-		const vote: VoteResult = voteAnswers(this.#history, this.format.questions, MIN_VOTES);
+		const vote: VoteResult = voteAnswers(this.#history, this.format.questions, this.minVotes);
 		this.answers = vote.answers;
 		this.votes = vote.votes;
 		this.progress = vote.progress;
@@ -398,7 +480,7 @@ export class Scanner {
 			return;
 		}
 
-		this.message = "sostén la hoja quieta";
+		this.message = this.capture === "foto" ? "vuelve a disparar" : "sostén la hoja quieta";
 	}
 
 	#finish(): void {
@@ -441,7 +523,7 @@ export class Scanner {
 
 	async #maybeSendFrame(video: HTMLVideoElement): Promise<void> {
 		const worker = this.#worker;
-		if (worker == null || this.#busy || video.readyState < 2) {
+		if (worker == null || this.busy || video.readyState < 2) {
 			return;
 		}
 
@@ -451,7 +533,7 @@ export class Scanner {
 		}
 
 		this.#lastSentAt = now;
-		this.#busy = true;
+		this.busy = true;
 
 		try {
 			const width = Math.min(video.videoWidth, MAX_FRAME_WIDTH);
@@ -466,13 +548,14 @@ export class Scanner {
 				type: "frame",
 				frameId: ++this.#frameId,
 				formatId: this.formatId,
+				anchor: this.anchor,
 				debug: this.debug,
 				bitmap,
 			};
 
 			worker.postMessage(request, [bitmap]);
 		} catch {
-			this.#busy = false;
+			this.busy = false;
 		}
 	}
 }

@@ -7,6 +7,7 @@ import {
 	medianSpacing,
 	orderQuad,
 	pickCornerMarkers,
+	quadFromRows,
 	type Box,
 } from "./geometry";
 
@@ -242,5 +243,38 @@ describe("findAnswersQuad con la geometría de la hoja de 80", () => {
 
 		expect(quad?.topLeft).toEqual({ x: 55, y: 550 });
 		expect(quad?.bottomRight).toEqual({ x: 865, y: 1160 });
+	});
+});
+
+describe("quadFromRows", () => {
+	function row(left: number, right: number, y: number, count: number) {
+		return {
+			center: y,
+			left: { x: left, y },
+			right: { x: right, y },
+			width: right - left,
+			count,
+		};
+	}
+
+	it("deduce la marca de punta que falta en una fila", () => {
+		// Fila superior sin su marca derecha: 405 de ancho contra 528 de la inferior.
+		const quad = quadFromRows(row(75, 480, 550, 5), row(75, 603, 1100, 6), true);
+		expect(quad?.topRight).toEqual({ x: 603, y: 550 });
+		expect(quad?.topLeft).toEqual({ x: 75, y: 550 });
+	});
+
+	it("deduce la esquina cuando una fila trae una sola marca", () => {
+		const quad = quadFromRows(row(75, 75, 550, 1), row(75, 603, 1100, 6), true);
+		expect(quad?.topRight).toEqual({ x: 603, y: 550 });
+	});
+
+	it("no deduce nada si el modo estricto está activo", () => {
+		expect(quadFromRows(row(75, 480, 550, 5), row(75, 603, 1100, 6), false)).toBeNull();
+		expect(quadFromRows(row(75, 75, 550, 1), row(75, 603, 1100, 6), false)).toBeNull();
+	});
+
+	it("no inventa dos esquinas a la vez", () => {
+		expect(quadFromRows(row(75, 75, 550, 1), row(603, 603, 1100, 1), true)).toBeNull();
 	});
 });

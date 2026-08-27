@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { Quad } from "$lib/scan/geometry";
 	import type { Scanner } from "$lib/scan/scanner.svelte";
 	import { onMount } from "svelte";
 
@@ -17,24 +18,35 @@
 	// detector la ve pequeña y pide acercarse sin motivo.
 	let videoSize = $state<{ width: number; height: number }>({ width: 3, height: 4 });
 
+	export function getVideo(): HTMLVideoElement {
+		return video;
+	}
+
 	function anotarTamano(): void {
 		if (video?.videoWidth > 0) {
 			videoSize = { width: video.videoWidth, height: video.videoHeight };
 		}
 	}
 
-	export function getVideo(): HTMLVideoElement {
-		return video;
-	}
-
 	onMount(() => {
 		return () => scanner.stop();
 	});
+
+	function trazarQuad(context: CanvasRenderingContext2D, quad: Quad): void {
+		context.beginPath();
+		context.moveTo(quad.topLeft.x, quad.topLeft.y);
+		context.lineTo(quad.topRight.x, quad.topRight.y);
+		context.lineTo(quad.bottomRight.x, quad.bottomRight.y);
+		context.lineTo(quad.bottomLeft.x, quad.bottomLeft.y);
+		context.closePath();
+	}
 
 	// El overlay se redibuja cuando llega un resultado nuevo, no en cada frame de
 	// video: dibujar más seguido que el detector sólo gasta batería.
 	$effect(() => {
 		const quad = scanner.quad;
+		const marks = scanner.marks;
+		const qrQuad = scanner.qrQuad;
 		const size = scanner.frameSize;
 		if (overlay == null || size.width === 0) {
 			return;
@@ -51,21 +63,32 @@
 		}
 
 		context.clearRect(0, 0, overlay.width, overlay.height);
-		if (quad == null) {
-			return;
+		const trazo = Math.max(2, overlay.width * 0.004);
+
+		// Las marcas que la app ve, aunque todavía no formen una hoja: es la única
+		// pista útil mientras se encuadra ("ve tres, falta una").
+		context.fillStyle = "rgba(251, 191, 36, 0.9)";
+		for (const mark of marks) {
+			context.beginPath();
+			context.arc(mark.x, mark.y, trazo * 2, 0, Math.PI * 2);
+			context.fill();
 		}
 
-		context.beginPath();
-		context.moveTo(quad.topLeft.x, quad.topLeft.y);
-		context.lineTo(quad.topRight.x, quad.topRight.y);
-		context.lineTo(quad.bottomRight.x, quad.bottomRight.y);
-		context.lineTo(quad.bottomLeft.x, quad.bottomLeft.y);
-		context.closePath();
-		context.lineWidth = Math.max(2, overlay.width * 0.004);
-		context.strokeStyle = scanner.status === "listo" ? "#34d399" : "#38bdf8";
-		context.stroke();
-		context.fillStyle = "rgba(56, 189, 248, 0.12)";
-		context.fill();
+		if (qrQuad != null) {
+			context.strokeStyle = "rgba(167, 139, 250, 0.9)";
+			context.lineWidth = trazo;
+			trazarQuad(context, qrQuad);
+			context.stroke();
+		}
+
+		if (quad != null) {
+			trazarQuad(context, quad);
+			context.lineWidth = trazo;
+			context.strokeStyle = scanner.status === "listo" ? "#34d399" : "#38bdf8";
+			context.stroke();
+			context.fillStyle = "rgba(56, 189, 248, 0.12)";
+			context.fill();
+		}
 	});
 </script>
 
@@ -80,12 +103,19 @@
 	></video>
 	<canvas bind:this={overlay}></canvas>
 
+	{#if scanner.quad == null}
+		<!-- Guía de encuadre: sólo mientras no hay hoja detectada, para no tapar el
+		     cuadrilátero real cuando ya la encontró. -->
+		<div class="guia" aria-hidden="true"></div>
+	{/if}
+
 	<div class="estado" class:listo={scanner.status === "listo"}>
 		<span class="punto"></span>
 		<span>{scanner.message}</span>
+		<span class="marcas">{scanner.marks.length} marcas</span>
 	</div>
 
-	{#if scanner.status === "escaneando"}
+	{#if scanner.status === "escaneando" && scanner.capture === "continua"}
 		<div class="progreso" aria-label="avance de la lectura">
 			<div class="barra" style:width={`${Math.round(scanner.progress * 100)}%`}></div>
 		</div>
@@ -109,6 +139,14 @@
 		width: 100%;
 		height: 100%;
 		object-fit: contain;
+	}
+
+	.guia {
+		position: absolute;
+		inset: 8% 6% 14%;
+		border: 2px dashed rgba(255, 255, 255, 0.45);
+		border-radius: 8px;
+		pointer-events: none;
 	}
 
 	.estado {
@@ -135,6 +173,13 @@
 
 	.estado.listo .punto {
 		background: var(--ok);
+	}
+
+	.estado .marcas {
+		margin-left: auto;
+		color: var(--texto-suave);
+		font-size: 0.75rem;
+		white-space: nowrap;
 	}
 
 	.progreso {

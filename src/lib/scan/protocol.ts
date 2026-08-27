@@ -1,5 +1,6 @@
 import type { FormatId } from "./format";
-import type { Box, Quad } from "./geometry";
+import type { Point, Quad } from "./geometry";
+import type { Anchor } from "./strategy";
 
 export type ScanRequest =
 	| {
@@ -11,6 +12,7 @@ export type ScanRequest =
 			type: "frame";
 			frameId: number;
 			formatId: FormatId;
+			anchor: Anchor;
 			debug: boolean;
 			bitmap: ImageBitmap;
 	  };
@@ -34,8 +36,10 @@ export type FrameResult = {
 	quad: Quad | null;
 	frameWidth: number;
 	frameHeight: number;
-	/** Marcas candidatas descartadas y aceptadas, sólo en modo depuración. */
-	markers: Box[];
+	/** Centros de las marcas detectadas, en coordenadas del frame, para el overlay. */
+	marks: Point[];
+	/** Esquinas del QR en coordenadas del frame, si se buscó y se encontró. */
+	qrQuad: Quad | null;
 	timing: FrameTiming;
 };
 
