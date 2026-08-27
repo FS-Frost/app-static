@@ -9,6 +9,15 @@
 
 	let canvas: HTMLCanvasElement | null = $state(null);
 
+	// Qué fracción del frame se está analizando: 100% es búsqueda completa, menos es
+	// seguimiento enganchado a la hoja.
+	const seguimiento = $derived<number>(
+		scanner.searchRect == null || scanner.frameSize.width === 0
+			? 1
+			: (scanner.searchRect.width * scanner.searchRect.height) /
+					(scanner.frameSize.width * scanner.frameSize.height)
+	);
+
 	// La hoja rectificada llega como ImageBitmap desde el worker; pintarla es la
 	// forma rápida de ver si la grilla cayó donde debía.
 	$effect(() => {
@@ -39,6 +48,8 @@
 		<div><dt>rectificar</dt><dd>{scanner.timing.warp.toFixed(1)} ms</dd></div>
 		<div><dt>leer grilla</dt><dd>{scanner.timing.read.toFixed(1)} ms</dd></div>
 		<div><dt>frame</dt><dd>{scanner.frameSize.width}×{scanner.frameSize.height}</dd></div>
+		<div><dt>seguimiento</dt><dd data-testid="seguimiento">{(seguimiento * 100).toFixed(0)}%</dd></div>
+		<div><dt>zoom</dt><dd>{scanner.zoom === 0 ? "—" : `${scanner.zoom.toFixed(1)}x`}</dd></div>
 	</dl>
 
 	<canvas bind:this={canvas}></canvas>

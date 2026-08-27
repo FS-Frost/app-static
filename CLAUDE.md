@@ -48,6 +48,15 @@ bun run build
 - **Las anclas son para comparar en terreno, no para elegir por nosotros.** Si
   agregas una, va a `strategy.ts` con su descripción y con un test e2e contra la
   hoja que la justifica.
+- **La asistencia es ayuda, no requisito.** Toda constraint de cámara (zoom, enfoque,
+  punto de interés) va en try/catch: muchos teléfonos anuncian la capacidad y
+  rechazan la constraint, y eso no puede impedir escanear. Con el interruptor apagado
+  la app tiene que comportarse exactamente como antes.
+- **Ojo con los espacios de coordenadas.** Hay cuatro en juego: frame, copia de 640
+  para marcas, copia de 1280 para el QR y la zona de seguimiento (que desplaza el
+  origen). Dos bugs ya salieron de mezclarlos: la estimación del QR sin restar el
+  desplazamiento de la zona, y la zona del video aplicada a una foto de otra
+  resolución.
 - **La plantilla del QR se mide, no se estima.** El modo depuración imprime las
   esquinas del bloque en el marco del símbolo; esos son los números de `qrTemplates`.
   El contenido del QR nunca se escribe en una salida.
@@ -58,6 +67,7 @@ bun run build
 | --- | --- |
 | Nuevo formato de hoja | `src/lib/scan/format.ts` |
 | Anclas, tolerancias y modos de captura | `src/lib/scan/strategy.ts` |
+| Guía de encuadre, zoom, seguimiento, autodisparo | `src/lib/scan/assist.ts` |
 | Plantilla del QR y afinado con marcas | `src/lib/scan/qr.ts` |
 | Ubicación de la hoja / validación del encuadre | `src/lib/scan/geometry.ts` |
 | Reconstrucción de la grilla | `src/lib/scan/grid.ts` |
@@ -73,6 +83,7 @@ bun run build
 2. Mirar la hoja rectificada: si la grilla no cae sobre las burbujas, el problema
    es la ubicación (marcas/homografía), no la clasificación.
 3. Si el frame se descarta, el panel muestra el motivo con los contornos, marcas y
-   filas detectadas.
+   filas detectadas. `seguimiento` dice qué fracción del frame se está analizando:
+   100% es búsqueda completa, menos es seguimiento enganchado.
 4. `Relleno por burbuja` en el mismo panel da los valores con los que decidió
    `classify.ts`.

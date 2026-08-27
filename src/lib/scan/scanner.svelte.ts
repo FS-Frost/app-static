@@ -1,7 +1,27 @@
+import {
+	areaRatio,
+	guidance,
+	nextZoom,
+	quadBounds,
+	roiFor,
+	shouldAutoShoot,
+	STILL_THRESHOLD,
+	targetRect,
+	type Guidance,
+	type Rect,
+	type ZoomRange,
+} from "./assist";
 import { voteAnswers, type VoteResult } from "./classify";
 import { getFormat, type FormatId, type SheetFormat } from "./format";
 import type { Point, Quad } from "./geometry";
 import { defaultAnchor, defaultCapture, type Anchor, type Capture } from "./strategy";
+
+/**
+ * Proporción del bloque de respuestas que se usa para la guía en pantalla: 0,70 en
+ * la hoja de 45 y 0,75 en la de 80, así que un valor intermedio sirve para dibujar
+ * el objetivo sin cambiarlo al vuelo.
+ */
+const ASPECT_GUIA = 0.72;
 import type { FrameResult, FrameTiming, ScanRequest, ScanResponse } from "./protocol";
 import ScanWorker from "./worker?worker";
 
@@ -22,8 +42,17 @@ export const MIN_VOTES_PHOTO = 1;
 /** Frames por segundo que se envían al worker. Más que esto no mejora el consenso. */
 const TARGET_ANALYSIS_FPS = 12;
 
+/** En modo foto sólo se sondea el encuadre, y para eso alcanza con menos frames. */
+const PROBE_FPS = 6;
+
 /** Ancho máximo del frame enviado al worker: sobre esto sólo se paga memoria. */
 const MAX_FRAME_WIDTH = 1600;
+
+/** Frames fallidos seguidos antes de soltar el seguimiento y volver a buscar en todo el cuadro. */
+const TRACK_MISSES = 2;
+
+/** Cada cuánto se toca el zoom de la cámara, en ms. Tocarlo seguido desenfoca. */
+const ZOOM_INTERVAL = 500;
 
 /**
  * URL base del sitio, con la barra final.
@@ -67,6 +96,15 @@ export class Scanner {
 	fills = $state<number[][]>([]);
 	debugImage = $state<ImageBitmap | null>(null);
 	torch = $state<TorchState>({ available: false, on: false });
+	/** Auto-encuadre: seguimiento, zoom, enfoque dirigido, guía y autodisparo. */
+	assist = $state<boolean>(true);
+	/** Qué hacer para encuadrar mejor. */
+	guidance = $state<Guidance>({ message: "", nudge: null, framed: false });
+	/** Rectángulo donde conviene que caiga la hoja, en coordenadas del frame. */
+	target = $state<Rect | null>(null);
+	/** Zona que el worker analizó: si es distinta del frame, el seguimiento está activo. */
+	searchRect = $state<Rect | null>(null);
+	zoom = $state<number>(0);
 	/** true mientras el worker procesa un frame. */
 	busy = $state<boolean>(false);
 
@@ -85,6 +123,13 @@ export class Scanner {
 	#imageSource: ImageBitmap | null = null;
 	#imageFramesLeft = 0;
 	#wakeLock: WakeLockSentinel | null = null;
+	#roi: Rect | null = null;
+	#misses = 0;
+	#zoomRange: ZoomRange | null = null;
+	#lastZoomAt = 0;
+	#stillFrames = 0;
+	#autoShotDone = false;
+	#hadQuad = false;
 
 	async start(video: HTMLVideoElement, formatId: FormatId): Promise<void> {
 		this.stop();
@@ -117,7 +162,15 @@ export class Scanner {
 		void this.#keepScreenAwake();
 
 		if (this.capture === "foto") {
-			this.message = "encuadra y dispara";
+			this.message = this.assist ? "encuadra: disparo solo al estar quieta" : "encuadra y dispara";
+
+			// Con asistencia el video igual se analiza, pero sólo para encuadrar: así se
+			// puede decidir cuándo disparar. Sin asistencia no se toca la cámara hasta que
+			// el usuario aprieta.
+			if (this.assist) {
+				this.#pump();
+			}
+
 			return;
 		}
 
@@ -273,6 +326,12 @@ export class Scanner {
 				formatId: this.formatId,
 				anchor: this.anchor,
 				debug: this.debug,
+				// La foto viene a otra resolución que el video, así que la zona de
+				// seguimiento —medida en coordenadas del video— apuntaría a otro trozo de
+				// la imagen. En una foto a resolución completa buscar en todo el cuadro
+				// tampoco cuesta tanto.
+				roi: null,
+				read: true,
 				bitmap,
 			};
 
@@ -350,11 +409,37 @@ export class Scanner {
 		await video.play();
 
 		const track = stream.getVideoTracks()[0];
-		const capabilities = track?.getCapabilities?.() as { torch?: boolean } | undefined;
+		const capabilities = track?.getCapabilities?.() as
+			| { torch?: boolean; zoom?: ZoomRange; focusMode?: string[]; exposureMode?: string[] }
+			| undefined;
+
 		this.torch = {
 			available: capabilities?.torch === true,
 			on: false,
 		};
+
+		this.#zoomRange = capabilities?.zoom != null ? capabilities.zoom : null;
+		this.zoom = (track?.getSettings?.() as { zoom?: number } | undefined)?.zoom ?? this.#zoomRange?.min ?? 0;
+
+		// Enfoque y exposición continuos: buena parte de los "no se ven las marcas" es
+		// la cámara enfocando el fondo o quemando el blanco del papel, no un encuadre
+		// malo.
+		const advanced: MediaTrackConstraintSet[] = [];
+		if (capabilities?.focusMode?.includes("continuous") === true) {
+			advanced.push({ focusMode: "continuous" });
+		}
+
+		if (capabilities?.exposureMode?.includes("continuous") === true) {
+			advanced.push({ exposureMode: "continuous" });
+		}
+
+		if (advanced.length > 0) {
+			try {
+				await track.applyConstraints({ advanced });
+			} catch {
+				// Si el aparato no las acepta, se escanea igual.
+			}
+		}
 	}
 
 	#startWorker(): Promise<void> {
@@ -418,6 +503,8 @@ export class Scanner {
 				formatId: this.formatId,
 				anchor: this.anchor,
 				debug: this.debug,
+				roi: this.assist ? this.#roi : null,
+				read: true,
 				bitmap,
 			};
 
@@ -430,6 +517,8 @@ export class Scanner {
 		this.quad = result.quad;
 		this.marks = result.marks;
 		this.qrQuad = result.qrQuad;
+		this.searchRect = result.searchRect;
+		this.#updateAssist(result);
 		this.timing = result.timing;
 		this.frameSize = { width: result.frameWidth, height: result.frameHeight };
 
@@ -448,8 +537,21 @@ export class Scanner {
 
 		this.lastReason = result.reason;
 
+		// Un sondeo de encuadre no trae respuestas: no es una lectura fallida.
+		if (this.capture === "foto" && !this.busy && result.fills.length === 0 && result.quad != null) {
+			return;
+		}
+
 		if (!result.ok) {
 			this.message = result.reason;
+
+			// Si la foto no se pudo leer, se rearma el autodisparo para volver a intentar
+			// cuando la mano se quede quieta otra vez.
+			if (this.capture === "foto") {
+				this.#autoShotDone = false;
+				this.#stillFrames = 0;
+			}
+
 			if (this.#imageSource != null) {
 				this.#imageFramesLeft = 0;
 				this.status = "error";
@@ -481,6 +583,109 @@ export class Scanner {
 		}
 
 		this.message = this.capture === "foto" ? "vuelve a disparar" : "sostén la hoja quieta";
+	}
+
+	/**
+	 * Auto-encuadre. Todo se decide con lo que trajo el frame: dónde buscar el
+	 * siguiente, cuánto acercar la cámara, qué decirle al usuario y si disparar.
+	 */
+	#updateAssist(result: FrameResult): void {
+		const frame = { width: result.frameWidth, height: result.frameHeight };
+		this.target = targetRect(frame, ASPECT_GUIA);
+
+		// Con una imagen fija no hay nada que asistir: el encuadre ya está decidido, y
+		// seguir la hoja o pedir "acércate" sólo estorbaría.
+		if (this.#imageSource != null) {
+			this.guidance = { message: "", nudge: null, framed: result.ok };
+			this.#roi = null;
+			return;
+		}
+
+		if (!this.assist) {
+			this.guidance = { message: "", nudge: null, framed: result.ok };
+			this.#roi = null;
+			return;
+		}
+
+		this.guidance = guidance({
+			quad: result.quad,
+			marks: result.marks,
+			frame,
+			aspect: ASPECT_GUIA,
+		});
+
+		// Seguimiento: la próxima búsqueda se acota a donde estaba la hoja, y se suelta
+		// después de dos frames sin encontrarla para no quedar pegado a una zona vacía.
+		if (result.quad != null) {
+			this.#roi = roiFor(result.quad, frame);
+			this.#misses = 0;
+		} else {
+			this.#misses++;
+			if (this.#misses >= TRACK_MISSES) {
+				this.#roi = null;
+			}
+		}
+
+		if (result.quad != null && !this.#hadQuad) {
+			// Un toque al enganchar la hoja: permite encuadrar sin mirar la pantalla.
+			navigator.vibrate?.(25);
+		}
+
+		this.#hadQuad = result.quad != null;
+
+		this.#stillFrames = result.motion <= STILL_THRESHOLD ? this.#stillFrames + 1 : 0;
+
+		if (result.quad != null) {
+			void this.#followWithCamera(result.quad, frame);
+		}
+
+		if (
+			this.capture === "foto" &&
+			!this.#autoShotDone &&
+			shouldAutoShoot(this.#stillFrames, this.guidance.framed)
+		) {
+			this.#autoShotDone = true;
+			void this.shoot();
+		}
+	}
+
+	/**
+	 * Acerca la cámara y le dice dónde enfocar.
+	 *
+	 * El zoom se mueve de a poco y no más de dos veces por segundo: cada cambio
+	 * reenfoca y mueve la imagen, y hacerlo seguido es peor que no hacerlo.
+	 */
+	async #followWithCamera(quad: Quad, frame: { width: number; height: number }): Promise<void> {
+		const track = this.#stream?.getVideoTracks()[0];
+		if (track == null) {
+			return;
+		}
+
+		const bounds = quadBounds(quad);
+		const centro = {
+			x: Math.min(1, Math.max(0, (bounds.x + bounds.width / 2) / frame.width)),
+			y: Math.min(1, Math.max(0, (bounds.y + bounds.height / 2) / frame.height)),
+		};
+
+		const advanced: MediaTrackConstraintSet[] = [{ pointsOfInterest: [centro] }];
+
+		const now = performance.now();
+		if (this.#zoomRange != null && now - this.#lastZoomAt > ZOOM_INTERVAL) {
+			const ratio = areaRatio(bounds, targetRect(frame, ASPECT_GUIA));
+			const siguiente = nextZoom(this.zoom || this.#zoomRange.min, ratio, this.#zoomRange);
+			if (Math.abs(siguiente - this.zoom) >= this.#zoomRange.step) {
+				this.zoom = siguiente;
+				this.#lastZoomAt = now;
+				advanced.push({ zoom: siguiente });
+			}
+		}
+
+		try {
+			await track.applyConstraints({ advanced });
+		} catch {
+			// Muchos teléfonos anuncian estas capacidades y rechazan la constraint. No es
+			// motivo para dejar de escanear: la asistencia es ayuda, no requisito.
+		}
 	}
 
 	#finish(): void {
@@ -527,8 +732,9 @@ export class Scanner {
 			return;
 		}
 
+		const probe = this.capture === "foto";
 		const now = performance.now();
-		if (now - this.#lastSentAt < 1000 / TARGET_ANALYSIS_FPS) {
+		if (now - this.#lastSentAt < 1000 / (probe ? PROBE_FPS : TARGET_ANALYSIS_FPS)) {
 			return;
 		}
 
@@ -550,6 +756,8 @@ export class Scanner {
 				formatId: this.formatId,
 				anchor: this.anchor,
 				debug: this.debug,
+				roi: this.assist ? this.#roi : null,
+				read: !probe,
 				bitmap,
 			};
 

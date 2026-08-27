@@ -41,12 +41,37 @@
 		context.closePath();
 	}
 
+	function trazarFlecha(context: CanvasRenderingContext2D, desde: { x: number; y: number }, nudge: { x: number; y: number }, largo: number): void {
+		const norma = Math.hypot(nudge.x, nudge.y);
+		if (norma === 0) {
+			return;
+		}
+
+		const dx = (nudge.x / norma) * largo;
+		const dy = (nudge.y / norma) * largo;
+		const hasta = { x: desde.x + dx, y: desde.y + dy };
+		const angulo = Math.atan2(dy, dx);
+		const ala = largo * 0.25;
+
+		context.beginPath();
+		context.moveTo(desde.x, desde.y);
+		context.lineTo(hasta.x, hasta.y);
+		context.moveTo(hasta.x, hasta.y);
+		context.lineTo(hasta.x - ala * Math.cos(angulo - 0.5), hasta.y - ala * Math.sin(angulo - 0.5));
+		context.moveTo(hasta.x, hasta.y);
+		context.lineTo(hasta.x - ala * Math.cos(angulo + 0.5), hasta.y - ala * Math.sin(angulo + 0.5));
+		context.stroke();
+	}
+
 	// El overlay se redibuja cuando llega un resultado nuevo, no en cada frame de
 	// video: dibujar más seguido que el detector sólo gasta batería.
 	$effect(() => {
 		const quad = scanner.quad;
 		const marks = scanner.marks;
 		const qrQuad = scanner.qrQuad;
+		const target = scanner.target;
+		const searchRect = scanner.searchRect;
+		const nudge = scanner.guidance.nudge;
 		const size = scanner.frameSize;
 		if (overlay == null || size.width === 0) {
 			return;
@@ -64,6 +89,24 @@
 
 		context.clearRect(0, 0, overlay.width, overlay.height);
 		const trazo = Math.max(2, overlay.width * 0.004);
+
+		// Rectángulo objetivo: dónde conviene que caiga el bloque de respuestas. Se
+		// dibuja hasta que el encuadre sirve, y ahí desaparece para no estorbar.
+		if (target != null && !scanner.guidance.framed && scanner.status !== "listo") {
+			context.strokeStyle = "rgba(255, 255, 255, 0.5)";
+			context.lineWidth = trazo;
+			context.setLineDash([trazo * 4, trazo * 3]);
+			context.strokeRect(target.x, target.y, target.width, target.height);
+			context.setLineDash([]);
+		}
+
+		// Zona de seguimiento: si es más chica que el frame, la app está buscando sólo
+		// donde vio la hoja la última vez.
+		if (searchRect != null && scanner.assist) {
+			context.strokeStyle = "rgba(148, 163, 184, 0.35)";
+			context.lineWidth = trazo * 0.6;
+			context.strokeRect(searchRect.x, searchRect.y, searchRect.width, searchRect.height);
+		}
 
 		// Las marcas que la app ve, aunque todavía no formen una hoja: es la única
 		// pista útil mientras se encuadra ("ve tres, falta una").
@@ -89,6 +132,19 @@
 			context.fillStyle = "rgba(56, 189, 248, 0.12)";
 			context.fill();
 		}
+
+		// Flecha: hacia dónde mover el teléfono. Sale del centro porque es donde está
+		// mirando quien encuadra.
+		if (nudge != null && scanner.assist) {
+			context.strokeStyle = "rgba(56, 189, 248, 0.95)";
+			context.lineWidth = trazo * 1.5;
+			trazarFlecha(
+				context,
+				{ x: overlay.width / 2, y: overlay.height / 2 },
+				nudge,
+				Math.min(overlay.width, overlay.height) * 0.18
+			);
+		}
 	});
 </script>
 
@@ -103,15 +159,15 @@
 	></video>
 	<canvas bind:this={overlay}></canvas>
 
-	{#if scanner.quad == null}
-		<!-- Guía de encuadre: sólo mientras no hay hoja detectada, para no tapar el
-		     cuadrilátero real cuando ya la encontró. -->
-		<div class="guia" aria-hidden="true"></div>
-	{/if}
-
 	<div class="estado" class:listo={scanner.status === "listo"}>
 		<span class="punto"></span>
-		<span>{scanner.message}</span>
+		<!-- La guía sólo mientras se encuadra: una vez leída la hoja, lo que importa es
+		     el estado ("lectura estable"). -->
+		<span>
+			{scanner.assist && scanner.status === "escaneando" && scanner.guidance.message !== ""
+				? scanner.guidance.message
+				: scanner.message}
+		</span>
 		<span class="marcas">{scanner.marks.length} marcas</span>
 	</div>
 
@@ -139,14 +195,6 @@
 		width: 100%;
 		height: 100%;
 		object-fit: contain;
-	}
-
-	.guia {
-		position: absolute;
-		inset: 8% 6% 14%;
-		border: 2px dashed rgba(255, 255, 255, 0.45);
-		border-radius: 8px;
-		pointer-events: none;
 	}
 
 	.estado {

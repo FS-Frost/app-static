@@ -16,6 +16,7 @@
  *   5. Relleno de cada burbuja por conteo de píxeles oscuros y clasificación.
  */
 
+import type { Rect } from "./assist";
 import { classifyQuestion, type CellFill } from "./classify";
 import { getFormat, questionNumber, type SheetFormat } from "./format";
 import {
@@ -67,6 +68,7 @@ type MatPool = {
 	gray: CvMat;
 	small: CvMat;
 	qr: CvMat;
+	tiny: CvMat;
 	smallBin: CvMat;
 	page: CvMat;
 	pageEdges: CvMat;
@@ -75,6 +77,47 @@ type MatPool = {
 
 let pool: MatPool | null = null;
 let warpConvention: WarpConvention | null = null;
+let previousTiny: Uint8Array | null = null;
+
+/** Lado de la miniatura con la que se mide el movimiento entre frames. */
+const MOTION_SIZE = 32;
+
+/**
+ * Cuánto cambió la imagen respecto del frame anterior.
+ *
+ * Se mide sobre una miniatura de 32 px: alcanza para distinguir "la mano está
+ * quieta" de "el teléfono se está moviendo", que es lo único que hace falta para
+ * decidir si vale la pena disparar una foto, y cuesta nada.
+ */
+function measureMotion(module: CvModule, gray: CvMat): number {
+	if (pool == null) {
+		return 1;
+	}
+
+	module.resize(
+		gray,
+		pool.tiny,
+		new module.Size(MOTION_SIZE, MOTION_SIZE),
+		0,
+		0,
+		module.INTER_AREA
+	);
+
+	const current = new Uint8Array(pool.tiny.data);
+	const previous = previousTiny;
+	previousTiny = current;
+
+	if (previous == null || previous.length !== current.length) {
+		return 1;
+	}
+
+	let total = 0;
+	for (let i = 0; i < current.length; i++) {
+		total += Math.abs(current[i] - previous[i]);
+	}
+
+	return total / current.length / 255;
+}
 
 
 function post(message: ScanResponse, transfer: Transferable[] = []): void {
@@ -92,6 +135,8 @@ function emptyResult(reason: string, frameWidth: number, frameHeight: number, fo
 		frameHeight,
 		marks: [],
 		qrQuad: null,
+		motion: 0,
+		searchRect: null,
 		timing: {
 			total: 0,
 			locate: 0,
@@ -532,6 +577,25 @@ function renderDebugImage(page: CvMat, grid: GridModel | null, radius: number): 
 	return canvas.transferToImageBitmap();
 }
 
+/** Recorta la zona pedida contra el frame y la redondea a píxeles enteros. */
+function clampRect(rect: Rect | null, frameWidth: number, frameHeight: number): Rect | null {
+	if (rect == null) {
+		return null;
+	}
+
+	const x = Math.max(0, Math.floor(rect.x));
+	const y = Math.max(0, Math.floor(rect.y));
+	const width = Math.min(frameWidth - x, Math.ceil(rect.width));
+	const height = Math.min(frameHeight - y, Math.ceil(rect.height));
+
+	// Una zona diminuta no sirve para nada y además rompe el resize.
+	if (width < frameWidth * 0.15 || height < frameHeight * 0.1) {
+		return null;
+	}
+
+	return { x, y, width, height };
+}
+
 function processFrame(module: CvModule, request: Extract<ScanRequest, { type: "frame" }>): void {
 	const format = getFormat(request.formatId);
 	const bitmap = request.bitmap;
@@ -560,6 +624,7 @@ function processFrame(module: CvModule, request: Extract<ScanRequest, { type: "f
 			gray: new module.Mat(),
 			small: new module.Mat(),
 			qr: new module.Mat(),
+			tiny: new module.Mat(),
 			smallBin: new module.Mat(),
 			page: new module.Mat(),
 			pageEdges: new module.Mat(),
@@ -576,14 +641,25 @@ function processFrame(module: CvModule, request: Extract<ScanRequest, { type: "f
 		source.delete();
 	}
 
-	module.resize(
-		pool.gray,
-		pool.small,
-		new module.Size(LOCATE_WIDTH, Math.max(1, Math.round((frameHeight * LOCATE_WIDTH) / frameWidth))),
-		0,
-		0,
-		module.INTER_AREA
-	);
+	const search = clampRect(request.roi, frameWidth, frameHeight);
+	const region = search == null ? pool.gray : pool.gray.roi(new module.Rect(search.x, search.y, search.width, search.height));
+	const searchWidth = search?.width ?? frameWidth;
+	const searchHeight = search?.height ?? frameHeight;
+
+	try {
+		module.resize(
+			region,
+			pool.small,
+			new module.Size(LOCATE_WIDTH, Math.max(1, Math.round((searchHeight * LOCATE_WIDTH) / searchWidth))),
+			0,
+			0,
+			module.INTER_AREA
+		);
+	} finally {
+		if (search != null) {
+			region.delete();
+		}
+	}
 
 	// Umbral adaptativo con bloque de ~2,5 veces la marca y un C alto.
 	//
@@ -614,8 +690,15 @@ function processFrame(module: CvModule, request: Extract<ScanRequest, { type: "f
 	);
 
 	const result = emptyResult("", frameWidth, frameHeight, format);
-	const scale = LOCATE_WIDTH / frameWidth;
-	const aFrame = (point: Point): Point => ({ x: point.x / scale, y: point.y / scale });
+	result.motion = measureMotion(module, pool.gray);
+	result.searchRect = search;
+	const scale = LOCATE_WIDTH / searchWidth;
+	const offsetX = search?.x ?? 0;
+	const offsetY = search?.y ?? 0;
+	const aFrame = (point: Point): Point => ({ x: offsetX + point.x / scale, y: offsetY + point.y / scale });
+	// Y la vuelta: el QR se busca sobre el frame completo, así que su estimación hay
+	// que traerla al sistema de la copia recortada donde viven las marcas.
+	const aSmall = (point: Point): Point => ({ x: (point.x - offsetX) * scale, y: (point.y - offsetY) * scale });
 	const quadAFrame = (quad: Quad): Quad => ({
 		topLeft: aFrame(quad.topLeft),
 		topRight: aFrame(quad.topRight),
@@ -675,13 +758,10 @@ function processFrame(module: CvModule, request: Extract<ScanRequest, { type: "f
 			const estimado = answersQuadFromQr(qrSighting.quad, qrTemplates[format.id]);
 			if (estimado != null) {
 				const enSmall: Quad = {
-					topLeft: { x: (estimado.topLeft.x / qrScale) * scale, y: (estimado.topLeft.y / qrScale) * scale },
-					topRight: { x: (estimado.topRight.x / qrScale) * scale, y: (estimado.topRight.y / qrScale) * scale },
-					bottomRight: {
-						x: (estimado.bottomRight.x / qrScale) * scale,
-						y: (estimado.bottomRight.y / qrScale) * scale,
-					},
-					bottomLeft: { x: (estimado.bottomLeft.x / qrScale) * scale, y: (estimado.bottomLeft.y / qrScale) * scale },
+					topLeft: aSmall({ x: estimado.topLeft.x / qrScale, y: estimado.topLeft.y / qrScale }),
+					topRight: aSmall({ x: estimado.topRight.x / qrScale, y: estimado.topRight.y / qrScale }),
+					bottomRight: aSmall({ x: estimado.bottomRight.x / qrScale, y: estimado.bottomRight.y / qrScale }),
+					bottomLeft: aSmall({ x: estimado.bottomLeft.x / qrScale, y: estimado.bottomLeft.y / qrScale }),
 				};
 
 				const ajuste = snapQuadToMarks(
@@ -727,8 +807,16 @@ function processFrame(module: CvModule, request: Extract<ScanRequest, { type: "f
 	}
 
 	const quad: Quad = quadAFrame(smallQuad);
-
 	result.quad = quad;
+
+	// Sondeo de encuadre: con la hoja ubicada ya está todo lo que necesita la
+	// asistencia. Rectificar y leer sería gastar batería en un frame que nadie va a
+	// usar.
+	if (!request.read) {
+		result.timing.total = performance.now() - startedAt;
+		post({ type: "result", frameId: request.frameId, result, debugImage: null });
+		return;
+	}
 
 	const warpStartedAt = performance.now();
 	const warped = warpPage(module, pool.gray, quad, check.aspect);
@@ -802,7 +890,10 @@ function processFrame(module: CvModule, request: Extract<ScanRequest, { type: "f
 			// Las marcas vienen en coordenadas de la copia de 640 y el QR en las de su
 			// propia copia: hay que llevar unas al espacio de las otras o la medición sale
 			// escalada.
-			const aQr = (punto: Point): Point => ({ x: (punto.x / scale) * qrScale, y: (punto.y / scale) * qrScale });
+			const aQr = (punto: Point): Point => {
+				const enFrame = aFrame(punto);
+				return { x: enFrame.x * qrScale, y: enFrame.y * qrScale };
+			};
 			const esquinas = [marksQuad.topLeft, marksQuad.topRight, marksQuad.bottomRight, marksQuad.bottomLeft]
 				.map((punto) => pointInQrFrame(qrSighting.quad, aQr(punto)))
 				.map((punto) => `(${punto.x.toFixed(2)},${punto.y.toFixed(2)})`)

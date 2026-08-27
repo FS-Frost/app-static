@@ -35,16 +35,14 @@ test("lee la hoja desde la cámara en un teléfono", async ({ page }) => {
 	expect((caja?.height ?? 0) / (caja?.width ?? 1)).toBeCloseTo(video.height / video.width, 1);
 });
 
-test("modo foto: dispara y lee", async ({ page }) => {
+test("modo foto con asistencia: dispara solo al estar quieto", async ({ page }) => {
 	await page.goto("/");
 	await page.getByRole("button", { name: /^45 preguntas/ }).click();
 	await page.getByRole("button", { name: /^Una foto/ }).click();
 	await page.getByRole("button", { name: "Abrir cámara" }).click();
 
-	const disparar = page.getByRole("button", { name: /Tomar foto|Leyendo/ });
-	await expect(disparar).toBeVisible({ timeout: 30_000 });
-	await disparar.click();
-
+	// No se toca ningún botón: con la hoja encuadrada y la cámara quieta, la app
+	// dispara por su cuenta.
 	await expect(page.getByRole("button", { name: "Escanear otra" })).toBeVisible({ timeout: 40_000 });
 
 	const respuestas = await page.$$eval("li .respuesta", (celdas) =>
@@ -55,4 +53,37 @@ test("modo foto: dispara y lee", async ({ page }) => {
 	);
 
 	expect(respuestas).toEqual(RESPUESTAS_45);
+});
+
+test("modo foto sin asistencia: espera el botón", async ({ page }) => {
+	await page.goto("/");
+	await page.getByRole("button", { name: /^45 preguntas/ }).click();
+	await page.getByRole("button", { name: /^Una foto/ }).click();
+	await page.locator(".toggle input").first().uncheck();
+	await page.getByRole("button", { name: "Abrir cámara" }).click();
+
+	const disparar = page.getByRole("button", { name: /Tomar foto|Leyendo/ });
+	await expect(disparar).toBeVisible({ timeout: 30_000 });
+	await expect(page.getByRole("button", { name: "Escanear otra" })).toHaveCount(0);
+
+	await disparar.click();
+	await expect(page.getByRole("button", { name: "Escanear otra" })).toBeVisible({ timeout: 40_000 });
+});
+
+test("la asistencia engancha el seguimiento a la hoja", async ({ page }) => {
+	await page.goto("/");
+	await page.getByRole("button", { name: /^45 preguntas/ }).click();
+	// Depurar, que es donde se ve la fracción del frame analizada.
+	await page.locator(".toggle input").nth(1).check();
+	await page.getByRole("button", { name: "Abrir cámara" }).click();
+
+	await expect(page.getByRole("button", { name: "Escanear otra" })).toBeVisible({ timeout: 40_000 });
+
+	// Tras enganchar la hoja, la búsqueda se acota: menos trabajo por frame y marcas
+	// más grandes en la imagen analizada.
+	const seguimiento = page.getByTestId("seguimiento");
+	await expect(seguimiento).toBeVisible();
+	const porcentaje = Number((await seguimiento.textContent())?.replace("%", ""));
+	expect(porcentaje).toBeGreaterThan(0);
+	expect(porcentaje).toBeLessThan(100);
 });

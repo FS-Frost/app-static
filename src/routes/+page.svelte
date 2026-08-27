@@ -37,12 +37,18 @@
 		if (capturaGuardada != null && isCapture(capturaGuardada)) {
 			scanner.capture = capturaGuardada;
 		}
+
+		const asistenciaGuardada = localStorage.getItem("asistencia");
+		if (asistenciaGuardada != null) {
+			scanner.assist = asistenciaGuardada === "1";
+		}
 	});
 
 	$effect(() => {
 		localStorage.setItem("formato", formatId);
 		localStorage.setItem("ancla", scanner.anchor);
 		localStorage.setItem("captura", scanner.capture);
+		localStorage.setItem("asistencia", scanner.assist ? "1" : "0");
 	});
 
 	$effect(() => {
@@ -99,6 +105,7 @@
 		bind:formatId
 		bind:anchor={scanner.anchor}
 		bind:capture={scanner.capture}
+		bind:assist={scanner.assist}
 		bind:debug={scanner.debug}
 		onstart={() => (vista = "camara")}
 		ontest={(archivo) => {
@@ -128,7 +135,7 @@
 			     no hacía nada y parecía que la app se colgaba. -->
 			{#if vista === "camara" && scanner.capture === "foto" && scanner.status === "escaneando"}
 				<button type="button" class="primario" disabled={scanner.busy} onclick={() => scanner.shoot()}>
-					{scanner.busy ? "Leyendo…" : "Tomar foto"}
+					{scanner.busy ? "Leyendo…" : scanner.assist ? "Disparar ahora" : "Tomar foto"}
 				</button>
 			{/if}
 

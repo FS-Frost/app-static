@@ -69,10 +69,42 @@ falta toda la fila inferior de marcas (hay un test que lo comprueba).
   lejos. Un disparo basta: no hay consenso que hacer sobre una sola imagen. Si el
   navegador no lo soporta, cae al frame de video a resolución completa.
 
-Mientras se encuadra, el overlay dibuja lo que la app está viendo: las marcas
-detectadas como puntos, el QR si aparece, el cuadrilátero de la hoja cuando cierra,
-y el contador de marcas. Es la diferencia entre "no detecta" y "ve tres marcas,
-falta la de abajo a la derecha".
+### Asistencia de encuadre
+
+Un interruptor (encendido por defecto) que hace que el teléfono ayude a encuadrar
+en vez de esperar a que le pongan la hoja perfecta:
+
+- **Enfoque y exposición continuos**, pedidos a la cámara al abrirla y con el punto
+  de interés puesto en la hoja detectada. Buena parte de los "no se ven las marcas"
+  era la cámara enfocando el fondo o quemando el blanco del papel.
+- **Zoom automático**: con la hoja ubicada, se calcula cuánto sobra de cuadro y se
+  acerca la cámara. Se mueve de a poco (un tercio del camino) y como máximo dos
+  veces por segundo, porque cada cambio de zoom reenfoca y mueve la imagen: hacerlo
+  de golpe pierde el enganche justo cuando lo tenía. Tope en 4x.
+- **Seguimiento**: tras un acierto, el frame siguiente se busca sólo alrededor de la
+  última posición. No es sólo velocidad — al recortar antes de reducir a 640 px, las
+  marcas quedan más grandes en la imagen analizada, así que también se detecta mejor.
+  Se suelta después de dos frames sin encontrar la hoja.
+- **Guía direccional**: rectángulo objetivo punteado, flecha hacia dónde mover el
+  teléfono y un diagnóstico corto ("la hoja se sale del cuadro", "acércate", "mira
+  la hoja de frente"). El criterio **no** es centrar el bloque de respuestas: quien
+  encuadra ve la hoja entera y el bloque vive en los dos tercios de abajo, así que
+  pedir centrado es pedir algo imposible. Lo que se exige es que entre completo, se
+  vea grande y esté de frente.
+- **Autodisparo** en modo foto: se mide el movimiento entre frames sobre una
+  miniatura de 32 px y, con la hoja encuadrada y dos lecturas seguidas quietas, se
+  dispara solo. Mientras se encuadra, los frames de video se analizan **sin leer**
+  respuestas (sólo ubicar la hoja y medir movimiento), que es más barato; la lectura
+  sale de la foto a resolución completa.
+- **Vibración corta al enganchar la hoja**, para encuadrar sin mirar la pantalla.
+
+El overlay dibuja siempre lo que la app está viendo: marcas detectadas como puntos,
+el QR si aparece, el cuadrilátero cuando cierra, la zona de seguimiento y el
+contador de marcas. Es la diferencia entre "no detecta" y "ve tres marcas, falta la
+de abajo a la derecha".
+
+Con la asistencia apagada vuelve el comportamiento anterior: búsqueda en todo el
+cuadro, sin tocar la cámara y con disparo manual. Está así para poder comparar.
 
 El interruptor **Depurar** muestra la hoja rectificada con la grilla dibujada
 encima, los tiempos por etapa y el relleno medido de cada burbuja. Es la primera
@@ -86,6 +118,7 @@ SvelteKit 2 + Svelte 5 (runes), TypeScript, `adapter-static`, sin servidor.
 src/lib/scan/
   format.ts             formatos 45 / 80 (bloques, filas, alternativas)
   strategy.ts           anclas, modos de captura y tolerancias
+  assist.ts             guía de encuadre, zoom, zona de seguimiento y autodisparo
   geometry.ts           puntos, cajas, clustering, cuadrilátero de las marcas
   qr.ts                 QR: detección, plantilla por formato y afinado con marcas
   homography.ts         homografía 4->4 resuelta en JS
@@ -168,7 +201,8 @@ deja ahí el módulo ya resuelto.
 
 ## Tests
 
-- **Unitarios (vitest):** geometría, ajuste de filas y columnas, y clasificación.
+- **Unitarios (vitest):** geometría, ajuste de filas y columnas, clasificación y la
+  lógica de asistencia (guía, zoom, seguimiento, autodisparo).
   Son puros y rápidos; cubren los casos raros (una fila no detectada, grupos de
   sobra, falta una marca de esquina, doble marca, lápiz claro).
 - **End-to-end (playwright), proyecto `chromium`:** el pipeline completo, OpenCV
@@ -183,7 +217,8 @@ deja ahí el módulo ya resuelto.
   tapada, y el estricto rechazando esa misma hoja—.
 - **End-to-end, proyecto `movil`:** viewport de teléfono (Pixel 5) y **cámara falsa
   de Chrome** alimentada con un video de una hoja, generado con ffmpeg desde
-  `tests/fixtures/camara-45.png`. Cubre captura continua y modo foto. Es lo único que
+  `tests/fixtures/camara-45.png`. Cubre captura continua, modo foto con autodisparo
+  (sin tocar ningún botón), modo foto manual y que el seguimiento se enganche. Es lo único que
   ejercita el camino de cámara —permisos, `getUserMedia`, bombeo de frames,
   proporción de la vista previa— y no sólo el de "elegir una imagen". Sin ffmpeg, se
   salta.

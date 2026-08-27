@@ -6,6 +6,7 @@
 		formatId: FormatId;
 		anchor: Anchor;
 		capture: Capture;
+		assist: boolean;
 		debug: boolean;
 		onstart: () => void;
 		ontest: (file: File) => void;
@@ -15,6 +16,7 @@
 		formatId = $bindable(),
 		anchor = $bindable(),
 		capture = $bindable(),
+		assist = $bindable(),
 		debug = $bindable(),
 		onstart,
 		ontest,
@@ -102,6 +104,14 @@
 			onchange={elegirArchivo}
 		/>
 	</div>
+
+	<label class="toggle">
+		<input type="checkbox" bind:checked={assist} />
+		<span>
+			Asistencia de encuadre: sigue la hoja, acerca la cámara, enfoca el papel, indica hacia dónde moverse y,
+			en modo foto, dispara solo cuando está quieta
+		</span>
+	</label>
 
 	<label class="toggle">
 		<input type="checkbox" bind:checked={debug} />
