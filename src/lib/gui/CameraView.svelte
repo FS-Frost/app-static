@@ -133,6 +133,7 @@
 	     abrir el panel de depuración: es la métrica que importa al encuadrar. -->
 	<div
 		class="estado"
+		class:arriba={fill}
 		class:listo={scanner.status === "listo"}
 		data-primera={scanner.msToFirstRead}
 		data-estado={scanner.status}
@@ -186,6 +187,13 @@
 		left: 0.5rem;
 		right: 0.5rem;
 		bottom: 0.5rem;
+	}
+
+	/* A pantalla completa los botones viven abajo: el estado se va arriba para no
+	   quedar debajo de ellos. */
+	.estado.arriba {
+		top: calc(0.5rem + env(safe-area-inset-top));
+		bottom: auto;
 		display: flex;
 		align-items: center;
 		gap: 0.5rem;

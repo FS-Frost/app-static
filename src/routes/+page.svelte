@@ -206,17 +206,6 @@
 			<CameraView bind:this={camara} {scanner} fill={aPantallaCompleta} />
 		{/if}
 
-		<div class="resultado" bind:this={resultado}>
-			{#if scanner.status === "listo"}
-				<!-- Con la hoja leída la cámara ya se cerró: quedan los tiempos, que son lo
-				     que se mira para decidir si el encuadre valió la pena. -->
-				<p class="tiempos" data-testid="tiempos">
-					<span>Cámara abierta → lectura: <strong>{(scanner.msSinceCameraStart / 1000).toFixed(1)} s</strong></span>
-					<span>Detección desde la captura: <strong>{scanner.msToDetect} ms</strong></span>
-				</p>
-			{/if}
-		</div>
-
 		<div class="acciones">
 			{#if aPantallaCompleta}
 				<button type="button" class="secundario" onclick={volver}>← Formato</button>
@@ -240,6 +229,18 @@
 				<button type="button" class="primario" onclick={() => scanner.rescan()}>Escanear otra</button>
 				<button type="button" class="secundario" onclick={copiar}>{copiado ? "Copiado" : "Copiar"}</button>
 				<button type="button" class="secundario" onclick={descargar}>CSV</button>
+			{/if}
+
+		</div>
+
+		<div class="resultado" bind:this={resultado}>
+			{#if scanner.status === "listo"}
+				<!-- Con la hoja leída la cámara ya se cerró: quedan los tiempos, que son lo
+				     que se mira para decidir si el encuadre valió la pena. -->
+				<p class="tiempos" data-testid="tiempos">
+					<span>Cámara abierta → lectura: <strong>{(scanner.msSinceCameraStart / 1000).toFixed(1)} s</strong></span>
+					<span>Detección desde la captura: <strong>{scanner.msToDetect} ms</strong></span>
+				</p>
 			{/if}
 
 			{#if scanner.status === "error"}

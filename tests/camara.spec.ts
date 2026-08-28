@@ -80,9 +80,22 @@ test("a pantalla completa la cámara ocupa el ancho del viewport sin deformarse"
 		.evaluate((element) => getComputedStyle(element).objectFit);
 	expect(ajuste).toBe("contain");
 
+	// La tabla de respuestas no puede estar dentro de la barra de botones: cuando lo
+	// estuvo, sus 45 filas estiraron la barra y taparon el video con columnas.
+	await expect(page.locator(".acciones li")).toHaveCount(0);
+	await expect(page.locator(".resultado")).toBeHidden();
+
+	// Y los botones no pisan la barra de estado.
+	const botones = await page.locator(".acciones").boundingBox();
+	const estado = await page.locator(".estado").boundingBox();
+	expect(botones).not.toBeNull();
+	expect(estado).not.toBeNull();
+	expect((estado?.y ?? 0) + (estado?.height ?? 0)).toBeLessThanOrEqual(botones?.y ?? 0);
+
 	// Al terminar, la pantalla completa se suelta para mostrar las respuestas.
 	await expect(page.getByRole("button", { name: "Escanear otra" })).toBeVisible({ timeout: 40_000 });
 	await expect(page.locator(".marco.completa")).toHaveCount(0);
+	await expect(page.locator(".resultado")).toBeVisible();
 });
 
 test("modo foto con asistencia: dispara solo al estar quieto", async ({ page }) => {
