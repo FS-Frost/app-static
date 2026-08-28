@@ -98,6 +98,8 @@ export class Scanner {
 	torch = $state<TorchState>({ available: false, on: false });
 	/** Auto-encuadre: seguimiento, zoom, enfoque dirigido, guía y autodisparo. */
 	assist = $state<boolean>(true);
+	/** Cámara a pantalla completa mientras se escanea. */
+	fullscreen = $state<boolean>(true);
 	/** Qué hacer para encuadrar mejor. */
 	guidance = $state<Guidance>({ message: "", framed: false });
 	/** Rectángulo donde conviene que caiga la hoja, en coordenadas del frame. */
@@ -109,6 +111,10 @@ export class Scanner {
 	framesTried = $state<number>(0);
 	/** Milisegundos hasta la primera lectura válida. Es la métrica que importa al encuadrar. */
 	msToFirstRead = $state<number>(0);
+	/** Milisegundos desde que se pidió la cámara hasta tener la hoja leída. */
+	msSinceCameraStart = $state<number>(0);
+	/** Milisegundos entre capturar la imagen que sirvió y tener las respuestas. */
+	msToDetect = $state<number>(0);
 	/** true mientras el worker procesa un frame. */
 	busy = $state<boolean>(false);
 
@@ -136,6 +142,9 @@ export class Scanner {
 	#autoShotDone = false;
 	#hadQuad = false;
 	#scanStartedAt = 0;
+	#cameraStartedAt = 0;
+	#frameSentAt = 0;
+	#lastFrameMs = 0;
 
 	/**
 	 * Arranca el worker antes de que haga falta.
@@ -175,6 +184,7 @@ export class Scanner {
 		this.status = "cargando";
 		this.message = "abriendo la cámara";
 		this.#video = video;
+		this.#cameraStartedAt = performance.now();
 
 		// Cámara y detector se preparan en paralelo: son dos esperas independientes y
 		// juntas eran la mayor parte del tiempo hasta la primera lectura.
@@ -249,13 +259,8 @@ export class Scanner {
 	}
 
 	/** Detiene el escaneo y libera la cámara, pero conserva el worker ya cargado. */
-	#stopScanning(): void {
+	#cancelPump(): void {
 		this.#running = false;
-		void this.#wakeLock?.release();
-		this.#wakeLock = null;
-		this.#imageSource?.close();
-		this.#imageSource = null;
-		this.#imageFramesLeft = 0;
 
 		if (this.#pumpHandle != null && this.#video != null) {
 			const video = this.#video as HTMLVideoElement & {
@@ -270,19 +275,14 @@ export class Scanner {
 		}
 
 		this.#pumpHandle = null;
+	}
 
-		for (const track of this.#stream?.getTracks() ?? []) {
-			track.stop();
-		}
-
-		this.#stream = null;
-
-		if (this.#video != null) {
-			this.#video.srcObject = null;
-		}
-
+	#stopScanning(): void {
+		this.#imageSource?.close();
+		this.#imageSource = null;
+		this.#imageFramesLeft = 0;
+		this.#releaseCamera();
 		this.busy = false;
-		this.torch = { available: false, on: false };
 
 		if (this.status === "escaneando" || this.status === "cargando") {
 			this.status = "idle";
@@ -305,6 +305,8 @@ export class Scanner {
 		this.progress = 0;
 		this.framesTried = 0;
 		this.msToFirstRead = 0;
+		this.msSinceCameraStart = 0;
+		this.msToDetect = 0;
 		this.quad = null;
 		this.marks = [];
 		this.qrQuad = null;
@@ -331,11 +333,36 @@ export class Scanner {
 			return;
 		}
 
-		if (this.#video == null) {
+		const video = this.#video;
+		if (video == null) {
 			return;
 		}
 
 		this.message = "apunta a la hoja completa";
+
+		// Tras una lectura la cámara queda cerrada: hay que volver a pedirla. El worker
+		// sigue cargado, así que esto es mucho más rápido que el primer arranque.
+		if (this.#stream == null) {
+			this.status = "cargando";
+			this.message = "abriendo la cámara";
+			this.#cameraStartedAt = performance.now();
+
+			void this.#openCamera(video)
+				.then(() => {
+					this.status = "escaneando";
+					this.message = "apunta a la hoja completa";
+					this.#scanStartedAt = performance.now();
+					void this.#keepScreenAwake();
+					this.#pump();
+				})
+				.catch((error: unknown) => {
+					this.status = "error";
+					this.message = error instanceof Error ? error.message : "no se pudo abrir la cámara";
+				});
+
+			return;
+		}
+
 		this.#pump();
 	}
 
@@ -355,6 +382,7 @@ export class Scanner {
 		}
 
 		this.busy = true;
+		this.#frameSentAt = performance.now();
 		this.message = "leyendo la foto";
 
 		try {
@@ -538,6 +566,7 @@ export class Scanner {
 		}
 
 		this.#imageFramesLeft--;
+		this.#frameSentAt = performance.now();
 		this.busy = true;
 
 		void createImageBitmap(source).then((bitmap) => {
@@ -559,6 +588,10 @@ export class Scanner {
 	#onResult(result: FrameResult, debugImage: ImageBitmap | null): void {
 		this.busy = false;
 		this.framesTried++;
+
+		// Cuánto tomó este frame desde que se capturó la imagen: incluye pasarla al
+		// worker, no sólo el trabajo de OpenCV, que es lo que el usuario percibe.
+		this.#lastFrameMs = this.#frameSentAt > 0 ? Math.round(performance.now() - this.#frameSentAt) : 0;
 
 		if (result.ok && this.msToFirstRead === 0 && this.#scanStartedAt > 0) {
 			this.msToFirstRead = Math.round(performance.now() - this.#scanStartedAt);
@@ -755,9 +788,36 @@ export class Scanner {
 
 	#finish(): void {
 		this.#running = false;
+		this.msToDetect = this.#lastFrameMs;
+		this.msSinceCameraStart =
+			this.#cameraStartedAt > 0 ? Math.round(performance.now() - this.#cameraStartedAt) : 0;
+
+		// Con la hoja leída la cámara no aporta nada y sí gasta batería y calienta el
+		// teléfono. Se suelta acá; "Escanear otra" la vuelve a abrir, y para entonces
+		// el detector ya está cargado.
+		this.#releaseCamera();
+
 		this.status = "listo";
 		this.message = "lectura estable";
 		navigator.vibrate?.(120);
+	}
+
+	/** Suelta la cámara y el bombeo de frames, sin tocar el worker ni el resultado. */
+	#releaseCamera(): void {
+		this.#cancelPump();
+
+		for (const track of this.#stream?.getTracks() ?? []) {
+			track.stop();
+		}
+
+		this.#stream = null;
+		this.torch = { available: false, on: false };
+		void this.#wakeLock?.release();
+		this.#wakeLock = null;
+
+		if (this.#video != null) {
+			this.#video.srcObject = null;
+		}
 	}
 
 	#pump(): void {
@@ -804,6 +864,7 @@ export class Scanner {
 		}
 
 		this.#lastSentAt = now;
+		this.#frameSentAt = now;
 		this.busy = true;
 
 		try {

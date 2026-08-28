@@ -1,13 +1,18 @@
 <script lang="ts">
 	import type { Quad } from "$lib/scan/geometry";
 	import type { Scanner } from "$lib/scan/scanner.svelte";
-	import { onMount } from "svelte";
 
 	interface Props {
 		scanner: Scanner;
+		/**
+		 * Ocupa toda la pantalla. La imagen se ajusta al ancho y no se deforma: con una
+		 * pantalla más alargada que el sensor quedan franjas arriba y abajo, que es
+		 * preferible a recortar la hoja o a estirarla.
+		 */
+		fill?: boolean;
 	}
 
-	let { scanner }: Props = $props();
+	let { scanner, fill = false }: Props = $props();
 
 	let video: HTMLVideoElement;
 	let overlay: HTMLCanvasElement;
@@ -27,10 +32,6 @@
 			videoSize = { width: video.videoWidth, height: video.videoHeight };
 		}
 	}
-
-	onMount(() => {
-		return () => scanner.stop();
-	});
 
 	function trazarQuad(context: CanvasRenderingContext2D, quad: Quad): void {
 		context.beginPath();
@@ -113,7 +114,11 @@
 	});
 </script>
 
-<div class="marco" style:aspect-ratio={`${videoSize.width} / ${videoSize.height}`}>
+<div
+	class="marco"
+	class:completa={fill}
+	style:aspect-ratio={fill ? undefined : `${videoSize.width} / ${videoSize.height}`}
+>
 	<video
 		bind:this={video}
 		playsinline
@@ -126,7 +131,12 @@
 
 	<!-- `data-primera` deja a la vista el tiempo hasta la primera lectura sin tener que
 	     abrir el panel de depuración: es la métrica que importa al encuadrar. -->
-	<div class="estado" class:listo={scanner.status === "listo"} data-primera={scanner.msToFirstRead}>
+	<div
+		class="estado"
+		class:listo={scanner.status === "listo"}
+		data-primera={scanner.msToFirstRead}
+		data-estado={scanner.status}
+	>
 		<span class="punto"></span>
 		<!-- La guía sólo mientras se encuadra: una vez leída la hoja, lo que importa es
 		     el estado ("lectura estable"). -->
@@ -153,6 +163,13 @@
 		border-radius: var(--radio);
 		overflow: hidden;
 		max-height: 70dvh;
+	}
+
+	.marco.completa {
+		width: 100dvw;
+		height: 100dvh;
+		max-height: none;
+		border-radius: 0;
 	}
 
 	video,

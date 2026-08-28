@@ -48,6 +48,13 @@ bun run build
 - **Las anclas son para comparar en terreno, no para elegir por nosotros.** Si
   agregas una, va a `strategy.ts` con su descripción y con un test e2e contra la
   hoja que la justifica.
+- **Ningún ancla puede ser un requisito.** La de omisión es el QR, pero busca las
+  marcas igual y se cae a ellas: una referencia que deja la app inservible cuando
+  falta no sirve como omisión.
+- **El componente de cámara no maneja el ciclo de vida.** Lo hace la página. Cuando
+  `CameraView` cerraba el escáner al desmontarse, alternar entre pantalla completa y
+  vista normal montaba y desmontaba instancias y dejaba el estado en `idle` con la
+  hoja ya leída.
 - **La asistencia es ayuda, no requisito.** Toda constraint de cámara (zoom, enfoque,
   punto de interés) va en try/catch: muchos teléfonos anuncian la capacidad y
   rechazan la constraint, y eso no puede impedir escanear. Con el interruptor apagado

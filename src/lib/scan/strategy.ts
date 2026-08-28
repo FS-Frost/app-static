@@ -39,7 +39,8 @@ export const ANCHORS: AnchorInfo[] = [
 	{
 		id: "qr",
 		label: "QR de la cabecera",
-		detail: "Se ancla en el QR y deduce dónde están las respuestas. Sirve aunque las marcas queden fuera.",
+		detail:
+			"Se ancla en el QR y deduce dónde están las respuestas: sirve aunque las marcas queden fuera del cuadro. Si el QR no se ve, cae a las marcas.",
 	},
 ];
 
@@ -62,7 +63,12 @@ export const CAPTURES: CaptureInfo[] = [
 	},
 ];
 
-export const defaultAnchor: Anchor = "auto";
+/**
+ * El QR va por omisión: es lo que se ve de más lejos y con peor foco, y su
+ * estimación se afina igual con las marcas que aparezcan. En terreno resultó el
+ * encuadre menos exigente.
+ */
+export const defaultAnchor: Anchor = "qr";
 export const defaultCapture: Capture = "continua";
 
 export function isAnchor(value: string): value is Anchor {

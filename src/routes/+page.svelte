@@ -42,6 +42,11 @@
 		if (asistenciaGuardada != null) {
 			scanner.assist = asistenciaGuardada === "1";
 		}
+
+		const pantallaGuardada = localStorage.getItem("pantalla-completa");
+		if (pantallaGuardada != null) {
+			scanner.fullscreen = pantallaGuardada === "1";
+		}
 	});
 
 	$effect(() => {
@@ -49,6 +54,7 @@
 		localStorage.setItem("ancla", scanner.anchor);
 		localStorage.setItem("captura", scanner.capture);
 		localStorage.setItem("asistencia", scanner.assist ? "1" : "0");
+		localStorage.setItem("pantalla-completa", scanner.fullscreen ? "1" : "0");
 	});
 
 	// El detector se empieza a cargar en cuanto se abre la app: son 2,5 MB de wasm y
@@ -78,6 +84,12 @@
 	function getAnchor(id: Anchor) {
 		return ANCHORS.find((opcion) => opcion.id === id) ?? ANCHORS[0];
 	}
+
+	// Pantalla completa sólo mientras se escanea: al terminar hay que ver las
+	// respuestas, no el video.
+	const aPantallaCompleta = $derived<boolean>(
+		vista === "camara" && scanner.fullscreen && scanner.status !== "listo"
+	);
 
 	function volver(): void {
 		scanner.stop();
@@ -113,6 +125,7 @@
 		bind:anchor={scanner.anchor}
 		bind:capture={scanner.capture}
 		bind:assist={scanner.assist}
+		bind:fullscreen={scanner.fullscreen}
 		bind:debug={scanner.debug}
 		onstart={() => (vista = "camara")}
 		ontest={(archivo) => {
@@ -121,7 +134,7 @@
 		}}
 	/>
 {:else}
-	<section class="escaneo">
+	<section class="escaneo" class:completa={aPantallaCompleta}>
 		<header>
 			<button type="button" class="secundario" onclick={volver}>← Formato</button>
 			<span class="titulo">
@@ -134,10 +147,23 @@
 		</header>
 
 		{#if vista === "camara"}
-			<CameraView bind:this={camara} {scanner} />
+			<CameraView bind:this={camara} {scanner} fill={aPantallaCompleta} />
+		{/if}
+
+		{#if scanner.status === "listo"}
+			<!-- Con la hoja leída la cámara ya se cerró: quedan los tiempos, que son lo
+			     que se mira para decidir si el encuadre valió la pena. -->
+			<p class="tiempos" data-testid="tiempos">
+				<span>Cámara abierta → lectura: <strong>{(scanner.msSinceCameraStart / 1000).toFixed(1)} s</strong></span>
+				<span>Detección desde la captura: <strong>{scanner.msToDetect} ms</strong></span>
+			</p>
 		{/if}
 
 		<div class="acciones">
+			{#if aPantallaCompleta}
+				<button type="button" class="secundario" onclick={volver}>← Formato</button>
+			{/if}
+
 			<!-- El botón sólo aparece con la cámara ya abierta: apretarlo mientras carga
 			     no hacía nada y parecía que la app se colgaba. -->
 			{#if vista === "camara" && scanner.capture === "foto" && scanner.status === "escaneando"}
@@ -177,6 +203,57 @@
 {/if}
 
 <style>
+	/* Pantalla completa: la sección tapa todo y sólo quedan el video y los botones
+	   flotando abajo. El resto (cabecera, tabla de respuestas, panel de depuración) se
+	   esconde hasta que haya lectura. */
+	.escaneo.completa {
+		position: fixed;
+		inset: 0;
+		z-index: 10;
+		max-width: none;
+		padding: 0;
+		gap: 0;
+		background: #000;
+		justify-content: center;
+	}
+
+	.escaneo.completa header,
+	.escaneo.completa .tiempos {
+		display: none;
+	}
+
+	.escaneo.completa :global(.hoja),
+	.escaneo.completa :global(.debug) {
+		display: none;
+	}
+
+	.escaneo.completa .acciones {
+		position: absolute;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		justify-content: center;
+		padding: 0.75rem 0.75rem calc(0.75rem + env(safe-area-inset-bottom));
+		background: linear-gradient(to top, rgba(15, 23, 42, 0.85), transparent);
+	}
+
+	.tiempos {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.25rem 1rem;
+		margin: 0;
+		padding: 0.6rem 0.75rem;
+		border-radius: var(--radio);
+		background: var(--fondo-panel);
+		color: var(--texto-suave);
+		font-size: 0.8125rem;
+	}
+
+	.tiempos strong {
+		color: var(--texto);
+		font-variant-numeric: tabular-nums;
+	}
+
 	.escaneo {
 		display: flex;
 		flex-direction: column;

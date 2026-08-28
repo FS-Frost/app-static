@@ -52,5 +52,5 @@ test("avisa cuando la imagen no tiene una hoja", async ({ page }) => {
 	await page.getByRole("button", { name: /^45 preguntas/ }).click();
 	await page.locator("input[type=file]").setInputFiles("tests/fixtures/sin-hoja.png");
 
-	await expect(page.locator(".error")).toContainText(/hoja|burbujas|filas|columnas/, { timeout: 30_000 });
+	await expect(page.locator(".error")).toContainText(/hoja|QR|burbujas|filas|columnas/, { timeout: 30_000 });
 });

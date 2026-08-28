@@ -7,6 +7,7 @@
 		anchor: Anchor;
 		capture: Capture;
 		assist: boolean;
+		fullscreen: boolean;
 		debug: boolean;
 		onstart: () => void;
 		ontest: (file: File) => void;
@@ -17,6 +18,7 @@
 		anchor = $bindable(),
 		capture = $bindable(),
 		assist = $bindable(),
+		fullscreen = $bindable(),
 		debug = $bindable(),
 		onstart,
 		ontest,
@@ -104,6 +106,11 @@
 			onchange={elegirArchivo}
 		/>
 	</div>
+
+	<label class="toggle">
+		<input type="checkbox" bind:checked={fullscreen} />
+		<span>Cámara a pantalla completa: la imagen se ajusta al ancho, sin deformarse</span>
+	</label>
 
 	<label class="toggle">
 		<input type="checkbox" bind:checked={assist} />

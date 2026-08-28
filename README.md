@@ -39,8 +39,11 @@ pantalla de inicio*): abre a pantalla completa, en vertical, y arranca sin red.
    capturar**. Las tres elecciones quedan guardadas en `localStorage`.
 2. **Abrir cámara**, o **Usar una imagen** para leer una foto o un escaneo del
    carrete.
-3. Cuando la lectura se estabiliza, se puede copiar (`01=A,02=,03=BC`) o bajar un
-   CSV.
+3. Cuando la lectura se estabiliza, **la cámara se cierra sola** y aparecen las
+   respuestas junto con dos tiempos: cuánto pasó desde que se abrió la cámara y
+   cuánto tomó la detección desde que se capturó la imagen que sirvió. Se puede
+   copiar (`01=A,02=,03=BC`) o bajar un CSV, y **Escanear otra** vuelve a abrir la
+   cámara (esta vez con el detector ya cargado).
 
 ### Cómo ubicar la hoja
 
@@ -49,10 +52,10 @@ depende del teléfono, de la luz y de la costumbre:
 
 | Ancla | En qué se apoya | Cuándo conviene |
 | --- | --- | --- |
-| **Automático** (por defecto) | prueba todas las vías en cada frame hasta que una cierra | uso normal |
+| **QR de la cabecera** (por defecto) | el QR, afinado con las marcas que se vean; si el QR no aparece, cae a las marcas | uso normal |
+| **Automático** | prueba las vías por orden de confianza hasta que una cierra | comparar |
 | **Marcas, tolerante** | las marcas negras impresas, aguantando ángulo y distancia; deduce una esquina que falte | comparar |
 | **Marcas, estricto** | las mismas marcas, exigiendo hoja completa y de frente | cuando importa más no equivocarse que ir rápido |
-| **QR de la cabecera** | el QR, y afina con las marcas que se vean | cuando la hoja no entra entera en el cuadro |
 
 El ancla **Automático** es una cascada dentro del mismo frame, ordenada por lo que
 cuesta y por lo que suele funcionar:
@@ -67,12 +70,25 @@ marcas a la vista se lee antes que uno con una esquina deducida, porque **leer e
 mitad del costo de un frame** y conviene empezar por el que más probablemente cierre.
 La vía que funcionó se ve en el panel de depuración.
 
-El ancla QR merece una explicación: el QR es chico y está lejos del bloque de
+El ancla QR **no es sólo QR**: las marcas se buscan igual y sirven de respaldo
+cuando el símbolo está sucio, tapado o fuera del cuadro. Una referencia que deja la
+app inservible cuando falta no puede ser la de omisión.
+
+El QR es chico y está lejos del bloque de
 respuestas, así que estimar desde él amplifica el error —medido sobre una hoja
 real, la esquina inferior derecha cae ~90 px del sitio correcto, suficiente para
 que la grilla no cierre—. Por eso el QR **estima** y cada marca que aparezca cerca
 de una esquina estimada la **corrige**. Con eso lee incluso una hoja a la que le
 falta toda la fila inferior de marcas (hay un test que lo comprueba).
+
+### Pantalla completa
+
+Un interruptor (encendido por defecto) deja la cámara ocupando toda la pantalla
+mientras se escanea, con los botones flotando abajo. La imagen se ajusta al **ancho**
+y no se deforma (`object-fit: contain`): en una pantalla más alargada que el sensor
+quedan franjas arriba y abajo, que es preferible a recortar la hoja o a estirarla.
+Al terminar la lectura la pantalla completa se suelta sola para mostrar las
+respuestas.
 
 ### Cómo capturar
 
@@ -119,6 +135,8 @@ en vez de esperar a que le pongan la hoja perfecta:
   respuestas (sólo ubicar la hoja y medir movimiento), que es más barato; la lectura
   sale de la foto a resolución completa.
 - **Vibración corta al enganchar la hoja**, para encuadrar sin mirar la pantalla.
+- **La cámara se cierra al terminar**: con la hoja leída no aporta nada y sí gasta
+  batería y calienta el teléfono.
 
 El overlay dibuja siempre lo que la app está viendo: marcas detectadas como puntos,
 el QR si aparece, el cuadrilátero cuando cierra, la zona de seguimiento y el
@@ -160,10 +178,10 @@ desde que arranca el escaneo —o sea sin contar la apertura de la cámara—:
 
 | Caso | Total | 1ª lectura |
 | --- | --- | --- |
-| Hoja centrada, buena luz | 1,47 s | 0,61 s |
-| Hoja chica, torcida 7° y con sombra | 1,97 s | 0,57 s |
-| Hoja con la fila inferior de marcas fuera del cuadro | 1,99 s | 0,80 s |
-| Poca luz | 1,46 s | 0,66 s |
+| Hoja centrada, buena luz | 1,43 s | 0,75 s |
+| Hoja chica, torcida 7° y con sombra | 1,42 s | 0,58 s |
+| Hoja con la fila inferior de marcas fuera del cuadro | 1,44 s | 0,65 s |
+| Poca luz | 1,41 s | 0,65 s |
 
 Antes de este trabajo: 2,47 s / 2,90 s / **nunca detectaba** / 2,47 s. Lo que lo
 movió, en orden de impacto:

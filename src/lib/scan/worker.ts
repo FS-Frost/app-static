@@ -915,7 +915,11 @@ function processFrame(module: CvModule, request: Extract<ScanRequest, { type: "f
 		return marks;
 	};
 
-	const usaMarcas = request.anchor !== "qr";
+	// Con ancla QR el símbolo manda, pero las marcas se buscan igual: son el respaldo
+	// cuando el QR está sucio, tapado o fuera del cuadro. Un ancla que deja la app
+	// inservible cuando falta su referencia no sirve de omisión.
+	const qrPrimero = request.anchor === "qr";
+	const usaMarcas = true;
 	const markers = usaMarcas ? intentarMarcas(LOCATE_THRESHOLD_C, "marcas") : [];
 	result.marks = markers.map((box) => aFrame({ x: box.x + box.w / 2, y: box.y + box.h / 2 }));
 
@@ -1013,16 +1017,17 @@ function processFrame(module: CvModule, request: Extract<ScanRequest, { type: "f
 				label: `qr (${qr.snapped}/4 afinadas)`,
 				quad: quadAFrame(ajuste.quad),
 				aspect: check.aspect,
-				confidence: 1 + qr.snapped * 0.4,
+				// Con ancla QR su vía se lee primero; en las demás compite por lo que se vio.
+				confidence: (qrPrimero ? 4 : 1) + qr.snapped * 0.4,
 			});
 		} else {
 			lastReason = check.reason;
 		}
 	};
 
-	const usaQr = request.anchor === "qr" || request.anchor === "auto" || request.debug;
+	const usaQr = qrPrimero || request.anchor === "auto" || request.debug;
 
-	if (usaQr && (attempts.length === 0 || request.anchor === "qr" || request.debug)) {
+	if (usaQr && (qrPrimero || attempts.length === 0 || request.debug)) {
 		buscarQr();
 	}
 
