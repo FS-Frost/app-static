@@ -55,6 +55,9 @@ bun run build
   `CameraView` cerraba el escáner al desmontarse, alternar entre pantalla completa y
   vista normal montaba y desmontaba instancias y dejaba el estado en `idle` con la
   hoja ya leída.
+- **La marca de versión la genera el despliegue, no el código.** `version.json` sale
+  del workflow con el short-sha; en local hay un `sha: "dev"` para que el archivo
+  nunca falte. Si cambias su formato, cambia las dos puntas.
 - **La asistencia es ayuda, no requisito.** Toda constraint de cámara (zoom, enfoque,
   punto de interés) va en try/catch: muchos teléfonos anuncian la capacidad y
   rechazan la constraint, y eso no puede impedir escanear. Con el interruptor apagado
@@ -90,6 +93,7 @@ bun run build
 | Pipeline OpenCV | `src/lib/scan/worker.ts` |
 | Cámara, estado, flash | `src/lib/scan/scanner.svelte.ts` |
 | Caché offline | `static/worker.js` |
+| Aviso de versión nueva | `src/lib/version.ts` y `version.svelte.ts` |
 
 ## Depurar una hoja que no se lee
 

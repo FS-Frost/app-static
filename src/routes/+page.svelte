@@ -8,10 +8,14 @@
 	import { isFormatId, type FormatId } from "$lib/scan/format";
 	import { Scanner } from "$lib/scan/scanner.svelte";
 	import { isAnchor, isCapture } from "$lib/scan/strategy";
+	import Toast from "$lib/gui/Toast.svelte";
+	import { VersionWatcher } from "$lib/version.svelte";
+	import { onMount, tick } from "svelte";
 
 	type Vista = "formato" | "camara" | "imagen";
 
 	const scanner = new Scanner();
+	const version = new VersionWatcher();
 
 	let vista = $state<Vista>("formato");
 	let formatId = $state<FormatId>("45");
@@ -19,6 +23,8 @@
 	let iniciado = $state<boolean>(false);
 	let copiado = $state<boolean>(false);
 	let imagen = $state<File | null>(null);
+	let resultado = $state<HTMLDivElement | null>(null);
+	let desplazado = $state<boolean>(false);
 
 	// Formato y preferencias sobreviven a un cierre de la app: en un colegio se
 	// corrigen muchas hojas seguidas y nadie quiere volver a elegir todo.
@@ -47,6 +53,11 @@
 		if (pantallaGuardada != null) {
 			scanner.fullscreen = pantallaGuardada === "1";
 		}
+
+		const vibracionGuardada = localStorage.getItem("vibracion");
+		if (vibracionGuardada != null) {
+			scanner.vibration = vibracionGuardada === "1";
+		}
 	});
 
 	$effect(() => {
@@ -55,6 +66,12 @@
 		localStorage.setItem("captura", scanner.capture);
 		localStorage.setItem("asistencia", scanner.assist ? "1" : "0");
 		localStorage.setItem("pantalla-completa", scanner.fullscreen ? "1" : "0");
+		localStorage.setItem("vibracion", scanner.vibration ? "1" : "0");
+	});
+
+	onMount(() => {
+		void version.start();
+		return () => version.stop();
 	});
 
 	// El detector se empieza a cargar en cuanto se abre la app: son 2,5 MB de wasm y
@@ -84,6 +101,33 @@
 	function getAnchor(id: Anchor) {
 		return ANCHORS.find((opcion) => opcion.id === id) ?? ANCHORS[0];
 	}
+
+	/**
+	 * Al terminar la lectura, la vista salta a las respuestas.
+	 *
+	 * Con la cámara a pantalla completa el salto es obligatorio: el video ocupaba
+	 * todo y la tabla queda fuera de la pantalla. Se espera a que el DOM se
+	 * reacomode —la sección deja de ser fija— o se desplaza a la posición vieja. Y se
+	 * respeta `prefers-reduced-motion`, que para algunas personas un scroll animado
+	 * es mareo.
+	 */
+	$effect(() => {
+		if (scanner.status !== "listo") {
+			desplazado = false;
+			return;
+		}
+
+		if (desplazado || resultado == null) {
+			return;
+		}
+
+		desplazado = true;
+		const suave = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+		void tick().then(() => {
+			resultado?.scrollIntoView({ behavior: suave ? "smooth" : "auto", block: "start" });
+		});
+	});
 
 	// Pantalla completa sólo mientras se escanea: al terminar hay que ver las
 	// respuestas, no el video.
@@ -119,6 +163,17 @@
 	<meta name="description" content="Lectura de hojas de respuestas con la cámara, sin servidor." />
 </svelte:head>
 
+{#if version.state !== "sin-cambios"}
+	<Toast
+		message={version.state === "disponible"
+			? `Hay una versión nueva (${version.latest}). Recarga para usarla.`
+			: `Se actualizó la app a la versión ${version.running}.`}
+		actionLabel={version.state === "disponible" ? "Recargar" : undefined}
+		onaction={version.state === "disponible" ? () => location.reload() : undefined}
+		ondismiss={() => version.dismiss()}
+	/>
+{/if}
+
 {#if vista === "formato"}
 	<FormatPicker
 		bind:formatId
@@ -126,6 +181,7 @@
 		bind:capture={scanner.capture}
 		bind:assist={scanner.assist}
 		bind:fullscreen={scanner.fullscreen}
+		bind:vibration={scanner.vibration}
 		bind:debug={scanner.debug}
 		onstart={() => (vista = "camara")}
 		ontest={(archivo) => {
@@ -150,14 +206,16 @@
 			<CameraView bind:this={camara} {scanner} fill={aPantallaCompleta} />
 		{/if}
 
-		{#if scanner.status === "listo"}
-			<!-- Con la hoja leída la cámara ya se cerró: quedan los tiempos, que son lo
-			     que se mira para decidir si el encuadre valió la pena. -->
-			<p class="tiempos" data-testid="tiempos">
-				<span>Cámara abierta → lectura: <strong>{(scanner.msSinceCameraStart / 1000).toFixed(1)} s</strong></span>
-				<span>Detección desde la captura: <strong>{scanner.msToDetect} ms</strong></span>
-			</p>
-		{/if}
+		<div class="resultado" bind:this={resultado}>
+			{#if scanner.status === "listo"}
+				<!-- Con la hoja leída la cámara ya se cerró: quedan los tiempos, que son lo
+				     que se mira para decidir si el encuadre valió la pena. -->
+				<p class="tiempos" data-testid="tiempos">
+					<span>Cámara abierta → lectura: <strong>{(scanner.msSinceCameraStart / 1000).toFixed(1)} s</strong></span>
+					<span>Detección desde la captura: <strong>{scanner.msToDetect} ms</strong></span>
+				</p>
+			{/if}
+		</div>
 
 		<div class="acciones">
 			{#if aPantallaCompleta}
@@ -183,18 +241,18 @@
 				<button type="button" class="secundario" onclick={copiar}>{copiado ? "Copiado" : "Copiar"}</button>
 				<button type="button" class="secundario" onclick={descargar}>CSV</button>
 			{/if}
+
+			{#if scanner.status === "error"}
+				<p class="error">{scanner.message}</p>
+			{/if}
+
+			<AnswerSheet
+				format={scanner.format}
+				answers={scanner.answers}
+				votes={scanner.votes}
+				minVotes={scanner.minVotes}
+			/>
 		</div>
-
-		{#if scanner.status === "error"}
-			<p class="error">{scanner.message}</p>
-		{/if}
-
-		<AnswerSheet
-			format={scanner.format}
-			answers={scanner.answers}
-			votes={scanner.votes}
-			minVotes={scanner.minVotes}
-		/>
 
 		{#if scanner.debug}
 			<DebugPanel {scanner} />
@@ -218,11 +276,16 @@
 	}
 
 	.escaneo.completa header,
-	.escaneo.completa .tiempos {
+	.escaneo.completa .resultado {
 		display: none;
 	}
 
-	.escaneo.completa :global(.hoja),
+	.resultado {
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+	}
+
 	.escaneo.completa :global(.debug) {
 		display: none;
 	}

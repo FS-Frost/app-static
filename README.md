@@ -39,8 +39,9 @@ pantalla de inicio*): abre a pantalla completa, en vertical, y arranca sin red.
    capturar**. Las tres elecciones quedan guardadas en `localStorage`.
 2. **Abrir cámara**, o **Usar una imagen** para leer una foto o un escaneo del
    carrete.
-3. Cuando la lectura se estabiliza, **la cámara se cierra sola** y aparecen las
-   respuestas junto con dos tiempos: cuánto pasó desde que se abrió la cámara y
+3. Cuando la lectura se estabiliza, **la cámara se cierra sola**, la vista **salta a
+   la tabla de respuestas** (venía de una cámara a pantalla completa: si no, la tabla
+   queda fuera de pantalla) y aparecen las respuestas junto con dos tiempos: cuánto pasó desde que se abrió la cámara y
    cuánto tomó la detección desde que se capturó la imagen que sirvió. Se puede
    copiar (`01=A,02=,03=BC`) o bajar un CSV, y **Escanear otra** vuelve a abrir la
    cámara (esta vez con el detector ya cargado).
@@ -80,6 +81,24 @@ real, la esquina inferior derecha cae ~90 px del sitio correcto, suficiente para
 que la grilla no cierre—. Por eso el QR **estima** y cada marca que aparezca cerca
 de una esquina estimada la **corrige**. Con eso lee incluso una hoja a la que le
 falta toda la fila inferior de marcas (hay un test que lo comprueba).
+
+### Aviso de versión nueva
+
+El workflow escribe `version.json` con el **short-sha** del commit desplegado. La app
+lo lee al arrancar, cada cinco minutos y cada vez que vuelve al frente, y compara:
+
+- si el código que corre es más nuevo que la última visita → *"Se actualizó la app a
+  la versión abc1234"*, sólo informativo;
+- si aparece un despliegue nuevo con la app abierta → *"Hay una versión nueva"* con
+  botón **Recargar**.
+
+Sin esto la actualización pasa desapercibida: el service worker sirve el cascarón
+desde caché y en un colegio la app queda abierta media mañana. La lectura va con
+`cache: "no-store"` para saltarse la caché HTTP; el service worker igual la sirve
+desde caché si no hay red, y ahí no hay nada que comparar.
+
+En desarrollo existe `static/version.json` con `sha: "dev"`, así el archivo nunca
+falta y no hay 404 en la consola.
 
 ### Pantalla completa
 
@@ -134,9 +153,13 @@ en vez de esperar a que le pongan la hoja perfecta:
   dispara solo. Mientras se encuadra, los frames de video se analizan **sin leer**
   respuestas (sólo ubicar la hoja y medir movimiento), que es más barato; la lectura
   sale de la foto a resolución completa.
-- **Vibración corta al enganchar la hoja**, para encuadrar sin mirar la pantalla.
-- **La cámara se cierra al terminar**: con la hoja leída no aporta nada y sí gasta
-  batería y calienta el teléfono.
+- **Vibración** (interruptor propio, encendido por defecto): un toque corto al
+  enganchar la hoja y dos al terminar la lectura, para encuadrar sin mirar la
+  pantalla. En iPhone `navigator.vibrate` no existe y esto queda mudo: la vibración
+  es refuerzo, nunca la única señal.
+- **La cámara se cierra al terminar** y la vista baja sola a las respuestas: con la
+  hoja leída la cámara no aporta nada y sí gasta batería y calienta el teléfono. El
+  salto respeta `prefers-reduced-motion`.
 
 El overlay dibuja siempre lo que la app está viendo: marcas detectadas como puntos,
 el QR si aparece, el cuadrilátero cuando cierra, la zona de seguimiento y el
@@ -155,6 +178,9 @@ herramienta a mirar cuando una hoja no se lee.
 SvelteKit 2 + Svelte 5 (runes), TypeScript, `adapter-static`, sin servidor.
 
 ```
+src/lib/
+  version.ts            marca de versión: lectura y comparación
+  version.svelte.ts     vigilancia del despliegue (arranque, poll, vuelta al frente)
 src/lib/scan/
   format.ts             formatos 45 / 80 (bloques, filas, alternativas)
   strategy.ts           anclas, modos de captura y tolerancias
@@ -351,7 +377,8 @@ Primera visita: ~3 MB (app + detector). Después arranca y escanea sin red.
 ### Publicar
 
 1. Push a `main` (o `master`). `.github/workflows/main.yml` corre lint, unitarios,
-   e2e y build, y publica `build/` en la rama `gh-pages`.
+   e2e y build, escribe `build/version.json` con el short-sha, y publica `build/` en
+   la rama `gh-pages`.
 2. En el repo: *Settings → Pages → Source: Deploy from a branch → `gh-pages` / `/`*.
 3. El workflow declara `permissions: contents: write`; sin eso el `GITHUB_TOKEN` de
    un repo nuevo es de sólo lectura y el push a `gh-pages` falla al final.

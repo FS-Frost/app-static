@@ -143,3 +143,54 @@ test("vuelve a abrir la cámara al escanear otra hoja", async ({ page }) => {
 	await expect(page.locator(".marco.completa")).toBeVisible({ timeout: 20_000 });
 	await expect(page.getByRole("button", { name: "Escanear otra" })).toBeVisible({ timeout: 40_000 });
 });
+
+test("vibra al enganchar la hoja y al terminar, y el interruptor la corta", async ({ page }) => {
+	// `navigator.vibrate` no existe en el headless: se instala un espía antes de que
+	// cargue la app.
+	await page.addInitScript(() => {
+		const registro: number[][] = [];
+		(window as unknown as { vibraciones: number[][] }).vibraciones = registro;
+		Object.defineProperty(navigator, "vibrate", {
+			value: (pattern: number | number[]) => {
+				registro.push(Array.isArray(pattern) ? pattern : [pattern]);
+				return true;
+			},
+			configurable: true,
+		});
+	});
+
+	await page.goto("/");
+	await page.getByRole("button", { name: /^45 preguntas/ }).click();
+	await page.getByRole("button", { name: "Abrir cámara" }).click();
+	await expect(page.getByRole("button", { name: "Escanear otra" })).toBeVisible({ timeout: 40_000 });
+
+	const conVibracion = await page.evaluate(() => (window as unknown as { vibraciones: number[][] }).vibraciones);
+	expect(conVibracion.length).toBeGreaterThan(0);
+	// El último aviso es el de "lectura lista": dos toques, distinto del enganche.
+	expect(conVibracion[conVibracion.length - 1].length).toBeGreaterThan(1);
+
+	await page.getByRole("button", { name: "← Formato" }).click();
+	await interruptor(page, "Vibrar al enganchar").uncheck();
+	await page.evaluate(() => ((window as unknown as { vibraciones: number[][] }).vibraciones.length = 0));
+
+	await page.getByRole("button", { name: "Abrir cámara" }).click();
+	await expect(page.getByRole("button", { name: "Escanear otra" })).toBeVisible({ timeout: 40_000 });
+
+	const sinVibracion = await page.evaluate(() => (window as unknown as { vibraciones: number[][] }).vibraciones);
+	expect(sinVibracion).toEqual([]);
+});
+
+test("al terminar salta a la tabla de respuestas", async ({ page }) => {
+	await page.goto("/");
+	await page.getByRole("button", { name: /^45 preguntas/ }).click();
+	await page.getByRole("button", { name: "Abrir cámara" }).click();
+	await expect(page.getByRole("button", { name: "Escanear otra" })).toBeVisible({ timeout: 40_000 });
+
+	// La tabla tiene que quedar a la vista sin que el usuario deslice: venía de una
+	// cámara a pantalla completa y las respuestas estaban abajo de todo.
+	const primera = page.locator("li").first();
+	await expect(primera).toBeInViewport({ timeout: 10_000 });
+
+	const desplazamiento = await page.evaluate(() => window.scrollY);
+	expect(desplazamiento).toBeGreaterThan(0);
+});

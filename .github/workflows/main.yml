@@ -47,9 +47,11 @@ jobs:
             - name: Build 🔧
               run: bun run build
 
-            - name: Generate build info
+            # Marca de versión que la app lee para avisar cuando hay un despliegue
+            # nuevo. El short-sha basta: es lo que se compara y lo que se muestra.
+            - name: Generate version marker
               run: |
-                  echo "{\"sha\": \"${{ github.sha }}\", \"ref\": \"${{ github.ref_name }}\", \"actor\": \"${{ github.actor }}\"}" > build/build-info.json
+                  echo "{\"sha\": \"${GITHUB_SHA:0:7}\", \"date\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"ref\": \"${{ github.ref_name }}\"}" > build/version.json
 
             - name: Generate .nojekyll
               run: echo "" > build/.nojekyll

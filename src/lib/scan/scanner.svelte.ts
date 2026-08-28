@@ -100,6 +100,8 @@ export class Scanner {
 	assist = $state<boolean>(true);
 	/** Cámara a pantalla completa mientras se escanea. */
 	fullscreen = $state<boolean>(true);
+	/** Vibrar al enganchar la hoja y al terminar la lectura. */
+	vibration = $state<boolean>(true);
 	/** Qué hacer para encuadrar mejor. */
 	guidance = $state<Guidance>({ message: "", framed: false });
 	/** Rectángulo donde conviene que caiga la hoja, en coordenadas del frame. */
@@ -725,8 +727,8 @@ export class Scanner {
 		}
 
 		if (result.quad != null && !this.#hadQuad) {
-			// Un toque al enganchar la hoja: permite encuadrar sin mirar la pantalla.
-			navigator.vibrate?.(25);
+			// Un toque corto al enganchar la hoja: permite encuadrar sin mirar la pantalla.
+			this.#vibrate(25);
 		}
 
 		this.#hadQuad = result.quad != null;
@@ -799,7 +801,24 @@ export class Scanner {
 
 		this.status = "listo";
 		this.message = "lectura estable";
-		navigator.vibrate?.(120);
+
+		// Dos toques al terminar: se distingue del toque corto de "enganché la hoja"
+		// sin mirar la pantalla.
+		this.#vibrate([60, 60, 120]);
+	}
+
+	/**
+	 * Vibra si el usuario lo dejó activado y el aparato lo soporta.
+	 *
+	 * iOS no implementa `navigator.vibrate`, así que esto es silencioso ahí: la
+	 * vibración es refuerzo, nunca la única señal de que algo pasó.
+	 */
+	#vibrate(pattern: number | number[]): void {
+		if (!this.vibration) {
+			return;
+		}
+
+		navigator.vibrate?.(pattern);
 	}
 
 	/** Suelta la cámara y el bombeo de frames, sin tocar el worker ni el resultado. */

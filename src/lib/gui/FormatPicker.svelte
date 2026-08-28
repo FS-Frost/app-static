@@ -8,6 +8,7 @@
 		capture: Capture;
 		assist: boolean;
 		fullscreen: boolean;
+		vibration: boolean;
 		debug: boolean;
 		onstart: () => void;
 		ontest: (file: File) => void;
@@ -19,6 +20,7 @@
 		capture = $bindable(),
 		assist = $bindable(),
 		fullscreen = $bindable(),
+		vibration = $bindable(),
 		debug = $bindable(),
 		onstart,
 		ontest,
@@ -110,6 +112,11 @@
 	<label class="toggle">
 		<input type="checkbox" bind:checked={fullscreen} />
 		<span>Cámara a pantalla completa: la imagen se ajusta al ancho, sin deformarse</span>
+	</label>
+
+	<label class="toggle">
+		<input type="checkbox" bind:checked={vibration} />
+		<span>Vibrar al enganchar la hoja y al terminar la lectura</span>
 	</label>
 
 	<label class="toggle">
