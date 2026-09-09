@@ -111,7 +111,7 @@
 	canvas {
 		width: 100%;
 		height: auto;
-		background: #000;
+		background: var(--escenario);
 		border-radius: 8px;
 	}
 

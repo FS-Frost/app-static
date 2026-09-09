@@ -55,6 +55,15 @@ bun run build
   `CameraView` cerraba el escáner al desmontarse, alternar entre pantalla completa y
   vista normal montaba y desmontaba instancias y dejaba el estado en `idle` con la
   hoja ya leída.
+- **Un `$effect` no puede leer y escribir el mismo `$state`.** Se re-ejecuta, dispara
+  su propia limpieza y cancela lo que acababa de programar. Pasó con la cortina: el
+  `setTimeout` que la baja se cancelaba solo y quedaba tapando todos los toques. Las
+  guardias de "esto ya se hizo" van en variables normales, no reactivas.
+- **Nada que tape la pantalla puede ser sólo decorativo.** La cortina se descarta con
+  un toque; si no, se come casi un segundo de toques de quien ya quiere seguir.
+- **El área de toque manda en la UI.** Mínimo 48 px (`--toque`), fila completa
+  clicable en los interruptores y acciones pegadas abajo con fondo sólido — flotando
+  sobre el contenido tapaban una opción.
 - **La marca de versión la genera el despliegue, no el código.** `version.json` sale
   del workflow con el short-sha; en local hay un `sha: "dev"` para que el archivo
   nunca falte. Si cambias su formato, cambia las dos puntas.
@@ -92,8 +101,21 @@ bun run build
 | Umbrales de marcado y consenso entre frames | `src/lib/scan/classify.ts` |
 | Pipeline OpenCV | `src/lib/scan/worker.ts` |
 | Cámara, estado, flash | `src/lib/scan/scanner.svelte.ts` |
+| Paleta y tokens del tema | `static/global.css` |
+| Controles de la pantalla de partida | `src/lib/gui/Segmented.svelte`, `Switch.svelte` |
+| Cortina de "hoja leída" | `src/lib/gui/Reveal.svelte` |
 | Caché offline | `static/worker.js` |
 | Aviso de versión nueva | `src/lib/version.ts` y `version.svelte.ts` |
+
+## Ojo con los tests de interfaz
+
+- El control segmentado expone `role="radio"`, no `button`: los selectores de
+  Playwright para formato, ancla y captura van con `getByRole("radio", ...)`.
+- Los ajustes vienen plegados: para tocar un ancla o un interruptor hay que abrir
+  `details.ajustes` primero.
+- La cámara se desmonta al terminar la lectura, así que nada que dependa de ella
+  sobrevive a ese punto. El tiempo hasta la primera lectura se lee de
+  `section.escaneo[data-primera]`.
 
 ## Depurar una hoja que no se lee
 

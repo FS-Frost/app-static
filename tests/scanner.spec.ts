@@ -14,7 +14,7 @@ type Formato = "45" | "80";
 
 async function leerHoja(page: Page, formato: Formato, fixture: string): Promise<string[]> {
 	await page.goto("/");
-	await page.getByRole("button", { name: new RegExp(`^${formato} preguntas`) }).click();
+	await page.getByRole("radio", { name: new RegExp(`^${formato} preguntas`) }).click();
 	await page.locator("input[type=file]").setInputFiles(fixture);
 
 	await expect(page.getByRole("button", { name: "Escanear otra" })).toBeVisible({ timeout: 30_000 });
@@ -49,7 +49,7 @@ test("no inventa respuestas en una hoja sin marcar", async ({ page }) => {
 
 test("avisa cuando la imagen no tiene una hoja", async ({ page }) => {
 	await page.goto("/");
-	await page.getByRole("button", { name: /^45 preguntas/ }).click();
+	await page.getByRole("radio", { name: /^45 preguntas/ }).click();
 	await page.locator("input[type=file]").setInputFiles("tests/fixtures/sin-hoja.png");
 
 	await expect(page.locator(".error")).toContainText(/hoja|QR|burbujas|filas|columnas/, { timeout: 30_000 });

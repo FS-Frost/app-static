@@ -5,6 +5,14 @@ import { FAKE_CAMERA_FILE } from "./global-setup";
 
 test.skip(!existsSync(FAKE_CAMERA_FILE), "requiere ffmpeg para generar el video de la cámara falsa");
 
+/** Los ajustes vienen plegados: lo que se usa en cada hoja está a la vista y el resto no. */
+async function abrirAjustes(page: Page): Promise<void> {
+	const resumen = page.locator("details.ajustes summary");
+	if ((await page.locator("details.ajustes[open]").count()) === 0) {
+		await resumen.click();
+	}
+}
+
 /** Los interruptores de la pantalla de formato, por su texto. */
 function interruptor(page: Page, texto: string) {
 	return page.locator(`.toggle:has-text("${texto}") input`);
@@ -21,15 +29,15 @@ async function respuestas(page: Page): Promise<string[]> {
 
 test("lee la hoja desde la cámara en un teléfono", async ({ page }) => {
 	await page.goto("/");
-	await page.getByRole("button", { name: /^45 preguntas/ }).click();
+	await page.getByRole("radio", { name: /^45 preguntas/ }).click();
 	await page.getByRole("button", { name: "Abrir cámara" }).click();
 
 	await expect(page.getByRole("button", { name: "Escanear otra" })).toBeVisible({ timeout: 40_000 });
 	expect(await respuestas(page)).toEqual(RESPUESTAS_45);
 
-	// Con la hoja leída, la cámara se suelta: el video se queda sin fuente.
-	const conFuente = await page.locator(".marco video").evaluate((element) => (element as HTMLVideoElement).srcObject != null);
-	expect(conFuente).toBe(false);
+	// Con la hoja leída, la cámara se suelta y la vista previa desaparece: dejar el
+	// último frame congelado sólo ocupa pantalla con una imagen muerta.
+	await expect(page.locator(".marco")).toHaveCount(0);
 
 	// Y se informan los dos tiempos.
 	const tiempos = await page.getByTestId("tiempos").textContent();
@@ -39,7 +47,8 @@ test("lee la hoja desde la cámara en un teléfono", async ({ page }) => {
 
 test("la vista previa no recorta ni deforma la hoja", async ({ page }) => {
 	await page.goto("/");
-	await page.getByRole("button", { name: /^45 preguntas/ }).click();
+	await page.getByRole("radio", { name: /^45 preguntas/ }).click();
+	await abrirAjustes(page);
 	await interruptor(page, "Cámara a pantalla completa").uncheck();
 	await page.getByRole("button", { name: "Abrir cámara" }).click();
 
@@ -63,7 +72,7 @@ test("la vista previa no recorta ni deforma la hoja", async ({ page }) => {
 
 test("a pantalla completa la cámara ocupa el ancho del viewport sin deformarse", async ({ page }) => {
 	await page.goto("/");
-	await page.getByRole("button", { name: /^45 preguntas/ }).click();
+	await page.getByRole("radio", { name: /^45 preguntas/ }).click();
 	await page.getByRole("button", { name: "Abrir cámara" }).click();
 
 	// Mientras escanea, el marco cubre la pantalla…
@@ -100,8 +109,9 @@ test("a pantalla completa la cámara ocupa el ancho del viewport sin deformarse"
 
 test("modo foto con asistencia: dispara solo al estar quieto", async ({ page }) => {
 	await page.goto("/");
-	await page.getByRole("button", { name: /^45 preguntas/ }).click();
-	await page.getByRole("button", { name: /^Una foto/ }).click();
+	await page.getByRole("radio", { name: /^45 preguntas/ }).click();
+	await abrirAjustes(page);
+	await page.getByRole("radio", { name: /^Una foto/ }).click();
 	await page.getByRole("button", { name: "Abrir cámara" }).click();
 
 	// No se toca ningún botón: con la hoja encuadrada y la cámara quieta, la app
@@ -112,8 +122,9 @@ test("modo foto con asistencia: dispara solo al estar quieto", async ({ page }) 
 
 test("modo foto sin asistencia: espera el botón", async ({ page }) => {
 	await page.goto("/");
-	await page.getByRole("button", { name: /^45 preguntas/ }).click();
-	await page.getByRole("button", { name: /^Una foto/ }).click();
+	await page.getByRole("radio", { name: /^45 preguntas/ }).click();
+	await abrirAjustes(page);
+	await page.getByRole("radio", { name: /^Una foto/ }).click();
 	await interruptor(page, "Asistencia de encuadre").uncheck();
 	await page.getByRole("button", { name: "Abrir cámara" }).click();
 
@@ -127,7 +138,8 @@ test("modo foto sin asistencia: espera el botón", async ({ page }) => {
 
 test("la asistencia engancha el seguimiento a la hoja", async ({ page }) => {
 	await page.goto("/");
-	await page.getByRole("button", { name: /^45 preguntas/ }).click();
+	await page.getByRole("radio", { name: /^45 preguntas/ }).click();
+	await abrirAjustes(page);
 	await interruptor(page, "Cámara a pantalla completa").uncheck();
 	await interruptor(page, "Depurar").check();
 	await page.getByRole("button", { name: "Abrir cámara" }).click();
@@ -145,7 +157,7 @@ test("la asistencia engancha el seguimiento a la hoja", async ({ page }) => {
 
 test("vuelve a abrir la cámara al escanear otra hoja", async ({ page }) => {
 	await page.goto("/");
-	await page.getByRole("button", { name: /^45 preguntas/ }).click();
+	await page.getByRole("radio", { name: /^45 preguntas/ }).click();
 	await page.getByRole("button", { name: "Abrir cámara" }).click();
 	await expect(page.getByRole("button", { name: "Escanear otra" })).toBeVisible({ timeout: 40_000 });
 
@@ -173,7 +185,7 @@ test("vibra al enganchar la hoja y al terminar, y el interruptor la corta", asyn
 	});
 
 	await page.goto("/");
-	await page.getByRole("button", { name: /^45 preguntas/ }).click();
+	await page.getByRole("radio", { name: /^45 preguntas/ }).click();
 	await page.getByRole("button", { name: "Abrir cámara" }).click();
 	await expect(page.getByRole("button", { name: "Escanear otra" })).toBeVisible({ timeout: 40_000 });
 
@@ -183,7 +195,8 @@ test("vibra al enganchar la hoja y al terminar, y el interruptor la corta", asyn
 	expect(conVibracion[conVibracion.length - 1].length).toBeGreaterThan(1);
 
 	await page.getByRole("button", { name: "← Formato" }).click();
-	await interruptor(page, "Vibrar al enganchar").uncheck();
+	await abrirAjustes(page);
+	await interruptor(page, "Vibrar").uncheck();
 	await page.evaluate(() => ((window as unknown as { vibraciones: number[][] }).vibraciones.length = 0));
 
 	await page.getByRole("button", { name: "Abrir cámara" }).click();
@@ -195,15 +208,14 @@ test("vibra al enganchar la hoja y al terminar, y el interruptor la corta", asyn
 
 test("al terminar salta a la tabla de respuestas", async ({ page }) => {
 	await page.goto("/");
-	await page.getByRole("button", { name: /^45 preguntas/ }).click();
+	await page.getByRole("radio", { name: /^45 preguntas/ }).click();
 	await page.getByRole("button", { name: "Abrir cámara" }).click();
 	await expect(page.getByRole("button", { name: "Escanear otra" })).toBeVisible({ timeout: 40_000 });
 
 	// La tabla tiene que quedar a la vista sin que el usuario deslice: venía de una
 	// cámara a pantalla completa y las respuestas estaban abajo de todo.
-	const primera = page.locator("li").first();
-	await expect(primera).toBeInViewport({ timeout: 10_000 });
-
-	const desplazamiento = await page.evaluate(() => window.scrollY);
-	expect(desplazamiento).toBeGreaterThan(0);
+	// Basta con que la tabla se vea sin deslizar. Cuánto haya que desplazar depende de
+	// lo alto que quede el encabezado, y eso no es lo que se está probando.
+	await expect(page.locator("li").first()).toBeInViewport({ timeout: 10_000 });
+	await expect(page.getByTestId("tiempos")).toBeInViewport();
 });

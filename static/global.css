@@ -1,16 +1,28 @@
+/*
+ * Tema claro. La app se usa en salas de clase con luz de día y hojas de papel
+ * blanco en la mano: una pantalla oscura obliga a la pupila a saltar entre el papel
+ * y el teléfono en cada hoja. La única superficie que se queda negra es el escenario
+ * del video, donde el fondo oscuro sí ayuda a ver el encuadre.
+ */
 :root {
-	--fondo: #0f172a;
-	--fondo-panel: #1b2436;
-	--fondo-panel-alto: #26314a;
-	--borde: #35405c;
-	--texto: #eef2ff;
-	--texto-suave: #a6b0c8;
-	--acento: #38bdf8;
-	--ok: #34d399;
-	--alerta: #fbbf24;
-	--error: #f87171;
-	--radio: 12px;
-	color-scheme: dark;
+	--fondo: #f4f6fb;
+	--fondo-panel: #ffffff;
+	--fondo-panel-alto: #eaf2fe;
+	--borde: #d3d9e6;
+	--borde-fuerte: #9aa5bd;
+	--texto: #16203a;
+	--texto-suave: #5a6580;
+	--acento: #0b63c5;
+	--acento-suave: #e3edfd;
+	--sobre-acento: #ffffff;
+	--ok: #0f7a4a;
+	--alerta: #a35a00;
+	--error: #b3261e;
+	--escenario: #10141c;
+	--radio: 14px;
+	/* Alto mínimo de cualquier cosa que se toque con el pulgar. */
+	--toque: 48px;
+	color-scheme: light;
 }
 
 * {
@@ -32,6 +44,13 @@ button {
 	font: inherit;
 	color: inherit;
 	cursor: pointer;
+}
+
+/* Foco visible sin excepciones: la app se usa con el teclado en el escritorio y con
+   lector de pantalla en el teléfono. */
+:focus-visible {
+	outline: 3px solid var(--acento);
+	outline-offset: 2px;
 }
 
 h1,

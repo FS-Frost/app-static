@@ -3,6 +3,7 @@
 	import CameraView from "$lib/gui/CameraView.svelte";
 	import DebugPanel from "$lib/gui/DebugPanel.svelte";
 	import FormatPicker from "$lib/gui/FormatPicker.svelte";
+	import Reveal from "$lib/gui/Reveal.svelte";
 	import { answersToCsv, answersToText } from "$lib/scan/classify";
 	import { ANCHORS, type Anchor } from "$lib/scan/strategy";
 	import { isFormatId, type FormatId } from "$lib/scan/format";
@@ -24,7 +25,14 @@
 	let copiado = $state<boolean>(false);
 	let imagen = $state<File | null>(null);
 	let resultado = $state<HTMLDivElement | null>(null);
-	let desplazado = $state<boolean>(false);
+	let revelando = $state<boolean>(false);
+	/**
+	 * Guardia del revelado. NO es `$state` a propósito: el efecto la lee y la escribe,
+	 * y con estado reactivo eso lo re-ejecuta, dispara su propia limpieza y cancela el
+	 * `setTimeout` que baja la cortina — que se quedaba arriba para siempre, tapando
+	 * todos los clics.
+	 */
+	let mostrado = false;
 
 	// Formato y preferencias sobreviven a un cierre de la app: en un colegio se
 	// corrigen muchas hojas seguidas y nadie quiere volver a elegir todo.
@@ -102,31 +110,44 @@
 		return ANCHORS.find((opcion) => opcion.id === id) ?? ANCHORS[0];
 	}
 
+	/** Cuánto dura la cortina de "hoja leída", en ms. */
+	const MS_REVELADO = 900;
+
+	const conRespuesta = $derived<number>(scanner.answers.filter((respuesta) => respuesta !== "").length);
+
 	/**
-	 * Al terminar la lectura, la vista salta a las respuestas.
+	 * Cortina entre la cámara y los resultados, y salto a la tabla.
 	 *
-	 * Con la cámara a pantalla completa el salto es obligatorio: el video ocupaba
-	 * todo y la tabla queda fuera de la pantalla. Se espera a que el DOM se
-	 * reacomode —la sección deja de ser fija— o se desplaza a la posición vieja. Y se
-	 * respeta `prefers-reduced-motion`, que para algunas personas un scroll animado
-	 * es mareo.
+	 * Va en un solo efecto y en este orden a propósito: se levanta la cortina, se
+	 * desplaza a la tabla **detrás** de ella, y recién entonces se baja. Así se ve la
+	 * tabla ya en su lugar en vez de un scroll que nadie pidió, y de paso se tapa el
+	 * reacomodo del layout, que pasa de cámara a pantalla completa a tabla con scroll.
+	 *
+	 * Con `prefers-reduced-motion` la cortina dura un parpedeo: informa —no es adorno—
+	 * pero no conviene retener a quien desactivó las animaciones.
 	 */
 	$effect(() => {
 		if (scanner.status !== "listo") {
-			desplazado = false;
+			revelando = false;
+			mostrado = false;
 			return;
 		}
 
-		if (desplazado || resultado == null) {
+		if (mostrado) {
 			return;
 		}
 
-		desplazado = true;
-		const suave = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+		mostrado = true;
+		revelando = true;
+		const breve = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 		void tick().then(() => {
-			resultado?.scrollIntoView({ behavior: suave ? "smooth" : "auto", block: "start" });
+			resultado?.scrollIntoView({ behavior: "auto", block: "start" });
 		});
+
+		const temporizador = setTimeout(() => (revelando = false), breve ? 250 : MS_REVELADO);
+
+		return () => clearTimeout(temporizador);
 	});
 
 	// Pantalla completa sólo mientras se escanea: al terminar hay que ver las
@@ -163,6 +184,16 @@
 	<meta name="description" content="Lectura de hojas de respuestas con la cámara, sin servidor." />
 </svelte:head>
 
+{#if revelando}
+	<Reveal
+		detected={conRespuesta}
+		total={scanner.format.questions}
+		msSinceCameraStart={scanner.msSinceCameraStart}
+		msToDetect={scanner.msToDetect}
+		ondismiss={() => (revelando = false)}
+	/>
+{/if}
+
 {#if version.state !== "sin-cambios"}
 	<Toast
 		message={version.state === "disponible"
@@ -190,10 +221,13 @@
 		}}
 	/>
 {:else}
-	<section class="escaneo" class:completa={aPantallaCompleta}>
+	<!-- `data-primera` expone el tiempo hasta la primera lectura sin abrir el panel de
+	     depuración. Va en la sección y no en la barra de estado porque esa vive dentro
+	     de la cámara, que se cierra al terminar. -->
+	<section class="escaneo" class:completa={aPantallaCompleta} data-primera={scanner.msToFirstRead}>
 		<header>
 			<button type="button" class="secundario" onclick={volver}>← Formato</button>
-			<span class="titulo">
+			<span class="titulo" title={vista === "imagen" ? "imagen" : getAnchor(scanner.anchor).label}>
 				{scanner.format.questions} preguntas · {vista === "imagen" ? "imagen" : getAnchor(scanner.anchor).label}
 			</span>
 			<label class="toggle">
@@ -202,7 +236,9 @@
 			</label>
 		</header>
 
-		{#if vista === "camara"}
+		<!-- Con la hoja leída la cámara ya se cerró: dejar el último frame congelado, con
+		     el overlay encima, sólo ocupa la mitad de la pantalla con una imagen muerta. -->
+		{#if vista === "camara" && scanner.status !== "listo"}
 			<CameraView bind:this={camara} {scanner} fill={aPantallaCompleta} />
 		{/if}
 
@@ -251,7 +287,7 @@
 				format={scanner.format}
 				answers={scanner.answers}
 				votes={scanner.votes}
-				minVotes={scanner.minVotes}
+				minVotes={scanner.votesUsed}
 			/>
 		</div>
 
@@ -272,7 +308,7 @@
 		max-width: none;
 		padding: 0;
 		gap: 0;
-		background: #000;
+		background: var(--escenario);
 		justify-content: center;
 	}
 
@@ -334,8 +370,15 @@
 		gap: 0.5rem;
 	}
 
+	/* Una sola línea con puntos suspensivos: el nombre del ancla es largo y partía la
+	   cabecera en dos en un teléfono angosto. El texto completo queda en el `title`. */
 	.titulo {
+		flex: 1;
+		min-width: 0;
 		font-weight: 700;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 
 	.toggle {

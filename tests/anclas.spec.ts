@@ -14,8 +14,10 @@ const ETIQUETAS = {
 
 async function escanear(page: Page, ancla: RegExp, archivo: string): Promise<void> {
 	await page.goto("/");
-	await page.getByRole("button", { name: /^45 preguntas/ }).click();
-	await page.getByRole("button", { name: ancla }).click();
+	await page.getByRole("radio", { name: /^45 preguntas/ }).click();
+	// El ancla vive en los ajustes, que vienen plegados.
+	await page.locator("details.ajustes summary").click();
+	await page.getByRole("radio", { name: ancla }).click();
 	await page.locator("input[type=file]").setInputFiles(archivo);
 }
 

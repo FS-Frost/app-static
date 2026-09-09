@@ -122,6 +122,14 @@ export class Scanner {
 
 	format = $derived<SheetFormat>(getFormat(this.formatId));
 	minVotes = $derived<number>(this.capture === "foto" ? MIN_VOTES_PHOTO : MIN_VOTES);
+	/**
+	 * Con cuántos votos coincidentes se cerró la lectura.
+	 *
+	 * No siempre es `minVotes`: con el teléfono quieto basta con dos. La tabla marca
+	 * como dudosa la pregunta que no llegó a este número, y si se comparara contra el
+	 * mínimo teórico saldría la hoja entera punteada después de un atajo.
+	 */
+	votesUsed = $state<number>(MIN_VOTES);
 
 	#worker: Worker | null = null;
 	#workerReady: Promise<void> | null = null;
@@ -306,6 +314,7 @@ export class Scanner {
 		this.fills = [];
 		this.progress = 0;
 		this.framesTried = 0;
+		this.votesUsed = this.minVotes;
 		this.msToFirstRead = 0;
 		this.msSinceCameraStart = 0;
 		this.msToDetect = 0;
@@ -657,6 +666,7 @@ export class Scanner {
 		this.progress = vote.progress;
 
 		if (vote.stable) {
+			this.votesUsed = this.minVotes;
 			this.#finish();
 			return;
 		}
@@ -666,6 +676,7 @@ export class Scanner {
 		if (this.assist && result.motion <= STILL_THRESHOLD && lastTwoAgree(this.#history)) {
 			this.answers = this.#history[this.#history.length - 1];
 			this.progress = 1;
+			this.votesUsed = 2;
 			this.#finish();
 			return;
 		}

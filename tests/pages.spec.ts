@@ -10,7 +10,7 @@ import { RESPUESTAS_45 } from "./esperado";
 const SITIO = "http://localhost:5055/app-static/";
 
 async function leerHoja(page: Page): Promise<string[]> {
-	await page.getByRole("button", { name: /^45 preguntas/ }).click();
+	await page.getByRole("radio", { name: /^45 preguntas/ }).click();
 	await page.locator("input[type=file]").setInputFiles("tests/fixtures/hoja-45.png");
 	await expect(page.getByRole("button", { name: "Escanear otra" })).toBeVisible({ timeout: 40_000 });
 

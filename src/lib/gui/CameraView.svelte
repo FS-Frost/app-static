@@ -131,13 +131,7 @@
 
 	<!-- `data-primera` deja a la vista el tiempo hasta la primera lectura sin tener que
 	     abrir el panel de depuración: es la métrica que importa al encuadrar. -->
-	<div
-		class="estado"
-		class:arriba={fill}
-		class:listo={scanner.status === "listo"}
-		data-primera={scanner.msToFirstRead}
-		data-estado={scanner.status}
-	>
+	<div class="estado" class:arriba={fill} class:listo={scanner.status === "listo"} data-estado={scanner.status}>
 		<span class="punto"></span>
 		<!-- La guía sólo mientras se encuadra: una vez leída la hoja, lo que importa es
 		     el estado ("lectura estable"). -->
@@ -160,7 +154,7 @@
 	.marco {
 		position: relative;
 		width: 100%;
-		background: #000;
+		background: var(--escenario);
 		border-radius: var(--radio);
 		overflow: hidden;
 		max-height: 70dvh;

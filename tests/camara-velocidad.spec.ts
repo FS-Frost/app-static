@@ -27,14 +27,14 @@ test.skip(!existsSync(FAKE_CAMERA_FILE), "requiere ffmpeg para generar el video 
 
 test("lee la hoja en pocos segundos desde que se abre la cámara", async ({ page }) => {
 	await page.goto("/");
-	await page.getByRole("button", { name: /^45 preguntas/ }).click();
+	await page.getByRole("radio", { name: /^45 preguntas/ }).click();
 
 	const inicio = performance.now();
 	await page.getByRole("button", { name: "Abrir cámara" }).click();
 	await expect(page.getByRole("button", { name: "Escanear otra" })).toBeVisible({ timeout: 20_000 });
 	const total = Math.round(performance.now() - inicio);
 
-	const primera = Number(await page.locator(".estado").getAttribute("data-primera"));
+	const primera = Number(await page.locator("section.escaneo").getAttribute("data-primera"));
 	console.log(`velocidad: total ${total} ms · primera lectura ${primera} ms`);
 
 	expect(total).toBeLessThan(9000);

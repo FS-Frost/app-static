@@ -39,12 +39,11 @@ pantalla de inicio*): abre a pantalla completa, en vertical, y arranca sin red.
    capturar**. Las tres elecciones quedan guardadas en `localStorage`.
 2. **Abrir cámara**, o **Usar una imagen** para leer una foto o un escaneo del
    carrete.
-3. Cuando la lectura se estabiliza, **la cámara se cierra sola**, la vista **salta a
-   la tabla de respuestas** (venía de una cámara a pantalla completa: si no, la tabla
-   queda fuera de pantalla) y aparecen las respuestas junto con dos tiempos: cuánto pasó desde que se abrió la cámara y
-   cuánto tomó la detección desde que se capturó la imagen que sirvió. Se puede
-   copiar (`01=A,02=,03=BC`) o bajar un CSV, y **Escanear otra** vuelve a abrir la
-   cámara (esta vez con el detector ya cargado).
+3. Cuando la lectura se estabiliza aparece una **cortina de "hoja leída"** con
+   cuántas preguntas traen respuesta y los tiempos; detrás de ella **la cámara se
+   cierra** y la vista **salta a la tabla**. La cortina se va sola en menos de un
+   segundo, o antes con un toque. Se puede copiar (`01=A,02=,03=BC`) o bajar un CSV, y
+   **Escanear otra** vuelve a abrir la cámara (esta vez con el detector ya cargado).
 
 ### Cómo ubicar la hoja
 
@@ -99,6 +98,29 @@ desde caché si no hay red, y ahí no hay nada que comparar.
 
 En desarrollo existe `static/version.json` con `sha: "dev"`, así el archivo nunca
 falta y no hay 404 en la consola.
+
+### La pantalla
+
+**Tema claro.** La app se usa en salas con luz de día y con hojas de papel blanco en
+la mano: una pantalla oscura obliga a la pupila a saltar entre el papel y el teléfono
+en cada hoja. La única superficie que se queda negra es el escenario del video, donde
+el fondo oscuro sí ayuda a ver el encuadre. Los colores viven como tokens en
+`static/global.css`; cambiar el tema es cambiar ese bloque.
+
+**Pensada para el pulgar.** La pantalla de partida muestra sólo lo que se usa en cada
+hoja —formato y los dos botones— y todo lo demás vive en **Ajustes**, plegado. Las
+opciones excluyentes son un control segmentado (`Segmented.svelte`, con
+`role="radiogroup"`) y los accesorios son interruptores con la fila completa como área
+de toque (`Switch.svelte`). Nada bajo 48 px de alto, y las acciones quedan pegadas
+abajo con fondo sólido.
+
+**Cortina al detectar.** Entre la cámara y los resultados va un `Reveal.svelte`: tilde
+verde, cuántas preguntas traen respuesta y los dos tiempos. Cumple dos funciones —da
+la señal de "listo, la leí", que en una tanda es lo que uno espera ver, y tapa el
+reacomodo del layout, que pasa de cámara a pantalla completa a tabla con scroll—. El
+desplazamiento a la tabla ocurre **detrás** de la cortina, así que al levantarse la
+tabla ya está en su lugar. Se descarta con un toque y con `prefers-reduced-motion`
+dura un parpadeo.
 
 ### Pantalla completa
 
